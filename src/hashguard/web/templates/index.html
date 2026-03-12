@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HashGuard v1.1.0 — Malware Research Platform</title>
+<title>HashGuard v1.1.2 — Malware Research Platform</title>
 <link rel="icon" type="image/png" href="/static/logo-icon.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
@@ -50,7 +50,7 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
 <div class="fixed left-0 top-0 h-full w-64 bg-hg-surface border-r border-hg-border flex flex-col z-50">
   <div class="p-5 border-b border-hg-border">
     <div class="flex items-center">
-      <img src="/static/logo-full.png" alt="HashGuard v1.1.0 Research Platform" class="h-10 object-contain">
+      <img src="/static/logo-full.png" alt="HashGuard v1.1.2 Research Platform" class="h-10 object-contain">
     </div>
   </div>
   <nav class="flex-1 p-3 space-y-1">
@@ -63,8 +63,8 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
     </template>
   </nav>
   <div class="p-4 border-t border-hg-border">
-    <div class="text-xs text-hg-muted">15 analysis engines</div>
-    <div class="text-xs text-hg-muted">160+ YARA rules &bull; 6 TI feeds</div>
+    <div class="text-xs text-hg-muted">18 analysis engines</div>
+    <div class="text-xs text-hg-muted">165+ YARA rules &bull; 7 TI feeds</div>
     <div class="text-xs text-hg-muted">ML + Behavioral + Static</div>
   </div>
 </div>
@@ -1241,12 +1241,14 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
               <option value="recent">Recent Samples</option>
               <option value="tag">By Tag</option>
               <option value="filetype">By File Type</option>
+              <option value="mixed">Mixed (Multi-type)</option>
               <option value="local">Local Directory</option>
             </select>
           </div>
           <div>
             <label class="text-xs text-hg-muted">Limit</label>
-            <input type="number" x-model.number="ingestLimit" min="1" max="1000" class="w-full bg-hg-bg border border-hg-border rounded-lg px-3 py-1.5 text-sm mt-1 focus:outline-none focus:border-hg-accent">
+            <input type="number" x-model.number="ingestLimit" min="1" :max="ingestSource==='recent'?100:ingestSource==='tag'||ingestSource==='filetype'?1000:10000" class="w-full bg-hg-bg border border-hg-border rounded-lg px-3 py-1.5 text-sm mt-1 focus:outline-none focus:border-hg-accent">
+            <div class="text-xs text-hg-muted mt-0.5" x-text="ingestSource==='recent'?'Max 100':ingestSource==='tag'||ingestSource==='filetype'?'Max 1,000':'Max 10,000'"></div>
           </div>
           <div x-show="ingestSource==='tag'">
             <label class="text-xs text-hg-muted">Tag</label>
@@ -1260,12 +1262,13 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
             <label class="text-xs text-hg-muted">Directory Path</label>
             <input type="text" x-model="ingestDirectory" placeholder="C:\samples\malware" class="w-full bg-hg-bg border border-hg-border rounded-lg px-3 py-1.5 text-sm mt-1 focus:outline-none focus:border-hg-accent">
           </div>
-          <div class="flex items-end">
+          <div>
+            <label class="text-xs text-hg-muted">&nbsp;</label>
             <template x-if="ingestStatus.status!=='running'">
-              <button @click="startIngest()" class="w-full px-4 py-1.5 bg-hg-accent text-hg-bg rounded-lg text-sm font-semibold hover:opacity-90 transition">Start Ingest</button>
+              <button @click="startIngest()" class="w-full px-4 py-1.5 bg-hg-accent text-hg-bg rounded-lg text-sm font-semibold hover:opacity-90 transition mt-1">Start Ingest</button>
             </template>
             <template x-if="ingestStatus.status==='running'">
-              <button @click="stopIngest()" class="w-full px-4 py-1.5 bg-hg-danger text-white rounded-lg text-sm font-semibold hover:opacity-90 transition">Stop</button>
+              <button @click="stopIngest()" class="w-full px-4 py-1.5 bg-hg-danger text-white rounded-lg text-sm font-semibold hover:opacity-90 transition mt-1">Stop</button>
             </template>
           </div>
         </div>
@@ -1273,7 +1276,11 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
           <div class="bg-hg-bg rounded-lg p-4 space-y-2">
             <div class="flex items-center justify-between text-sm">
               <span class="font-mono" :class="ingestStatus.status==='running'?'text-hg-accent':ingestStatus.status==='done'?'text-hg-success':'text-hg-warn'" x-text="ingestStatus.status.toUpperCase()"></span>
-              <span class="text-hg-muted" x-text="ingestStatus.elapsed_seconds ? ingestStatus.elapsed_seconds+'s' : ''"></span>
+              <span class="text-hg-muted" x-text="ingestStatus.elapsed_seconds ? Math.round(ingestStatus.elapsed_seconds)+'s' : ''"></span>
+            </div>
+            <div x-show="ingestStatus.status==='running' && !ingestStatus.total_candidates" class="flex items-center gap-2 text-sm text-hg-accent">
+              <div class="w-4 h-4 border-2 border-hg-accent border-t-transparent rounded-full animate-spin"></div>
+              <span>Fetching candidates from MalwareBazaar...</span>
             </div>
             <div class="w-full h-2 bg-hg-border rounded-full">
               <div class="h-full bg-hg-accent rounded-full transition-all" :style="`width:${ingestStatus.total_candidates ? ((ingestStatus.analysed+ingestStatus.skipped_existing+ingestStatus.failed)/ingestStatus.total_candidates*100) : 0}%`"></div>
@@ -1399,13 +1406,13 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
             </div>
           </template>
         </div>
-        <div class="text-xs text-hg-muted mt-3">15 rule files &bull; 160+ detection rules</div>
+        <div class="text-xs text-hg-muted mt-3">15 rule files &bull; 165+ detection rules</div>
       </div>
       <div class="bg-hg-card rounded-xl p-6 border border-hg-border">
         <h3 class="font-semibold mb-4">About</h3>
-        <p class="text-sm text-hg-muted">HashGuard v1.1.0 &mdash; Malware Research Platform</p>
+        <p class="text-sm text-hg-muted">HashGuard v1.1.2 &mdash; Malware Research Platform</p>
         <p class="text-sm text-hg-muted mt-1">Architecture: CLI + REST API + Web Dashboard</p>
-        <p class="text-sm text-hg-muted mt-1">Engine: Static + ML + Behavioral + YARA (160 rules) + Script Deobfuscation + Unicorn Emulation + 6 Threat Intel feeds</p>
+        <p class="text-sm text-hg-muted mt-1">Engine: Static + ML + Behavioral + YARA (167 rules) + Script Deobfuscation + Unicorn Emulation + 7 Threat Intel feeds</p>
         <p class="text-sm text-hg-muted mt-1">Author: Alberto Tijunelis Neto</p>
         <p class="text-sm text-hg-muted mt-1">License: Elastic-2.0</p>
       </div>
@@ -1526,6 +1533,10 @@ function app() {
 
     async startIngest() {
       try {
+        // Show immediate feedback
+        this.ingestStatus = { status: 'running', current_sha256: 'Fetching candidates from feed...', total_candidates: 0, analysed: 0, skipped_existing: 0, downloaded: 0, failed: 0 };
+        this.pollIngestStatus();
+
         const form = new FormData();
         form.append('source', this.ingestSource);
         form.append('limit', this.ingestLimit);
@@ -1534,12 +1545,15 @@ function app() {
         form.append('directory', this.ingestDirectory);
         const r = await fetch('/api/ingest/start', { method: 'POST', body: form });
         const d = await r.json();
-        if (d.started) {
-          this.pollIngestStatus();
-        } else {
+        if (!d.started) {
           this.ingestStatus = { status: 'error', errors: [d.reason || 'Failed to start'] };
+          if (this.ingestPolling) { clearInterval(this.ingestPolling); this.ingestPolling = null; }
         }
-      } catch(e) { console.error('Ingest start error:', e); }
+      } catch(e) {
+        console.error('Ingest start error:', e);
+        this.ingestStatus = { status: 'error', errors: ['Network error — could not reach server'] };
+        if (this.ingestPolling) { clearInterval(this.ingestPolling); this.ingestPolling = null; }
+      }
     },
 
     async stopIngest() {

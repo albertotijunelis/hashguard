@@ -287,3 +287,33 @@ class TestDetectCapabilities:
         r = detect_capabilities(str(p))
         for cap in r.capabilities:
             assert len(cap.evidence) > 0
+
+
+class TestGetPEImportsFallback:
+    """Cover _get_pe_imports pefile fallback (lines 397-405)."""
+
+    def test_pefile_import_fallback(self, tmp_path):
+        from hashguard import capability_detector
+        from hashguard.capability_detector import _get_pe_imports
+
+        with patch.object(capability_detector, "HAS_PEFILE", True):
+            mock_imp = MagicMock()
+            mock_imp.name = b"VirtualAlloc"
+            mock_entry = MagicMock()
+            mock_entry.imports = [mock_imp]
+            mock_pe = MagicMock()
+            mock_pe.DIRECTORY_ENTRY_IMPORT = [mock_entry]
+
+            with patch("hashguard.capability_detector.pefile") as mock_pefile:
+                mock_pefile.PE.return_value = mock_pe
+                mock_pefile.DIRECTORY_ENTRY = {"IMAGE_DIRECTORY_ENTRY_IMPORT": 1}
+
+                # No pe_info imports → should fall through to pefile
+                imports = _get_pe_imports(str(tmp_path / "fake.exe"), pe_info=None)
+                assert "VirtualAlloc" in imports
+
+    def test_file_read_error(self, tmp_path):
+        """Cover OSError during content read (line 424-425)."""
+        # Use a directory — exists but read_bytes() raises OSError
+        r = detect_capabilities(str(tmp_path))
+        assert r.total_detected == 0

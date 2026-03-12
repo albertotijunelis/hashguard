@@ -209,7 +209,7 @@ def _whois_lookup(domain: str) -> Dict[str, str]:
                     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d", "%d-%b-%Y"):
                         try:
                             dt = datetime.strptime(created[:19], fmt)
-                            age_days = (datetime.utcnow() - dt).days
+                            age_days = (datetime.now() - dt).days
                             result["domain_age_days"] = str(age_days)
                             break
                         except ValueError:

@@ -353,3 +353,29 @@ class TestDatasetFeatureStore:
         csv_data = database.export_dataset("csv")
         lines = csv_data.strip().split("\n")
         assert len(lines) == 1  # header only
+
+
+class TestSearchIOCs:
+    """Cover search_iocs function (lines 353-365)."""
+
+    def test_search_iocs_empty(self):
+        database.init_db()
+        results = database.search_iocs("nonexistent_ioc_xyz")
+        assert results == []
+
+    def test_search_iocs_with_data(self):
+        database.init_db()
+        # store_sample stores IOCs from strings_info
+        result_with_iocs = dict(
+            _SAMPLE_RESULT,
+            strings_info={
+                "iocs": {
+                    "urls": ["http://evil-c2.example.com/beacon"],
+                    "ips": ["203.0.113.42"],
+                }
+            },
+        )
+        database.store_sample(result_with_iocs)
+        results = database.search_iocs("evil-c2")
+        assert len(results) >= 1
+        assert any("evil-c2" in r["value"] for r in results)

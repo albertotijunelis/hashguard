@@ -324,6 +324,104 @@ class TestAnalyzePEWithMockedPefile:
         assert any("suspicious API" in w for w in result.warnings)
 
     @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
+    def test_invalid_timestamp(self, mock_ispe):
+        """TimeDateStamp causes exception → compile_time = 'Invalid' (lines 166-167)."""
+        pe_mock = self._make_pe_mock(timestamp=-999999999999)
+        pe_mock.FILE_HEADER.TimeDateStamp = -999999999999
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.PEFormatError = type("PEFormatError", (Exception,), {})
+
+        with patch.dict("sys.modules", {"pefile": mock_pefile}):
+            with patch("hashguard.pe_analyzer.pefile", mock_pefile, create=True):
+                result = analyze_pe("test.exe")
+
+        assert result.compile_time == "Invalid"
+
+    @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
+    def test_section_name_decode_exception(self, mock_ispe):
+        """Section Name.decode() raises → name is '<unknown>' (lines 180-181)."""
+        sec = MagicMock()
+        sec.Name.decode.side_effect = UnicodeDecodeError("utf-8", b"", 0, 1, "bad")
+        sec.get_data.return_value = b"\x00" * 512
+        sec.SizeOfRawData = 512
+        sec.Misc_VirtualSize = 4096
+        sec.Characteristics = 0x60000020
+
+        pe_mock = self._make_pe_mock(sections=[sec])
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.PEFormatError = type("PEFormatError", (Exception,), {})
+
+        with patch.dict("sys.modules", {"pefile": mock_pefile}):
+            with patch("hashguard.pe_analyzer.pefile", mock_pefile, create=True):
+                result = analyze_pe("test.exe")
+
+        assert any(s.name == "<unknown>" for s in result.sections)
+
+    @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
+    def test_dll_name_decode_exception(self, mock_ispe):
+        """DLL name decode raises → dll_name is '<unknown>' (lines 234-235)."""
+        imp_func = MagicMock()
+        imp_func.name = b"SomeFunc"
+        imp_func.ordinal = 1
+
+        dll_entry = MagicMock()
+        dll_entry.dll.decode.side_effect = Exception("bad dll name")
+        dll_entry.imports = [imp_func]
+
+        pe_mock = self._make_pe_mock(imports=[dll_entry])
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.PEFormatError = type("PEFormatError", (Exception,), {})
+
+        with patch.dict("sys.modules", {"pefile": mock_pefile}):
+            with patch("hashguard.pe_analyzer.pefile", mock_pefile, create=True):
+                result = analyze_pe("test.exe")
+
+        assert "<unknown>" in result.imports
+
+    @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
+    def test_func_name_decode_exception(self, mock_ispe):
+        """Import function name decode fails → fname = 'ord_N' (lines 241-242)."""
+        imp_func = MagicMock()
+        imp_func.name = MagicMock()
+        imp_func.name.decode.side_effect = Exception("bad name")
+        imp_func.ordinal = 42
+
+        dll_entry = MagicMock()
+        dll_entry.dll = b"kernel32.dll"
+        dll_entry.imports = [imp_func]
+
+        pe_mock = self._make_pe_mock(imports=[dll_entry])
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.PEFormatError = type("PEFormatError", (Exception,), {})
+
+        with patch.dict("sys.modules", {"pefile": mock_pefile}):
+            with patch("hashguard.pe_analyzer.pefile", mock_pefile, create=True):
+                result = analyze_pe("test.exe")
+
+        funcs = result.imports.get("kernel32.dll", [])
+        assert any("ord_42" in f for f in funcs)
+
+    @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
+    def test_import_parsing_exception(self, mock_ispe):
+        """parse_data_directories raises → caught gracefully (lines 247-248)."""
+        pe_mock = self._make_pe_mock()
+        pe_mock.parse_data_directories.side_effect = Exception("data dir error")
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.PEFormatError = type("PEFormatError", (Exception,), {})
+
+        with patch.dict("sys.modules", {"pefile": mock_pefile}):
+            with patch("hashguard.pe_analyzer.pefile", mock_pefile, create=True):
+                result = analyze_pe("test.exe")
+
+        assert result.is_pe is True
+        assert result.imports == {}
+
+    @patch("hashguard.pe_analyzer.is_pe_file", return_value=True)
     def test_import_parsing_clean_api(self, mock_ispe):
         """Non-suspicious imports should be recorded."""
         imp_func = MagicMock()

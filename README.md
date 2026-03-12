@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/albertotijunelis/hashguard/releases/latest"><img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Download-v1.1.0-FF6600?style=for-the-badge" alt="Download"></a>
+  <a href="https://github.com/albertotijunelis/hashguard/releases/latest"><img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Download-v1.1.2-FF6600?style=for-the-badge" alt="Download"></a>
   <a href="https://pypi.org/project/hashguard/"><img src="https://img.shields.io/badge/%F0%9F%93%A6_PyPI-hashguard-FF6600?style=for-the-badge" alt="PyPI"></a>
 </p>
 
@@ -22,9 +22,9 @@
 
 ---
 
-HashGuard is a professional malware research platform that combines static analysis, ML classification, behavioral detection, script deobfuscation, sandbox monitoring, 158 YARA rules, multi-source threat intelligence, fuzzy hashing, IOC graphing, and a web dashboard — accessible via CLI, web browser, or Python API.
+HashGuard is a professional malware research platform that combines static analysis, ML classification, behavioral detection, script deobfuscation, sandbox monitoring, 167 YARA rules, multi-source threat intelligence, fuzzy hashing, IOC graphing, and a web dashboard — accessible via CLI, web browser, or Python API.
 
-## What's new in v1.1.0
+## What's new in v1.1.2
 
 - **STIX 2.1 Export** — one-click export of analysis results as a STIX 2.1 Bundle; compatible with MISP, OpenCTI, TheHive, Splunk SOAR
 - **CI/CD Pipeline** — GitHub Actions: test matrix (3.9–3.13 × Ubuntu/Windows), CodeQL security scanning, automated release builds
@@ -96,7 +96,7 @@ HashGuard is a professional malware research platform that combines static analy
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                           HashGuard v1.1.0                           │
+│                           HashGuard v1.1.2                           │
 ├───────────────┬──────────────┬───────────┬───────────────────────────┤
 │     CLI       │ Web Dashboard│  REST API │       Python API          │
 │   cli.py      │ web/api.py   │  /api/*   │ from hashguard import ...│
@@ -106,8 +106,8 @@ HashGuard is a professional malware research platform that combines static analy
 ├──────────┬──────────┬──────────┬──────────┬──────────┬───────────────┤
 │ PE       │ YARA     │ Threat   │ ML       │ Sandbox  │ Deobfuscator │
 │ Analyzer │ Scanner  │ Intel    │ Classify │ Monitor  │ Unpacker     │
-│ advanced │ 158 rules│ 7 sources│ GBT + RF │ ETW/Snap │ UPX/Unicorn  │
-│ _pe.py   │ 14 files │ + cache  │ 5 class  │ diff     │              │
+│ advanced │ 167 rules│ 7 sources│ GBT + RF │ ETW/Snap │ UPX/Unicorn  │
+│ _pe.py   │ 15 files │ + cache  │ 5 class  │ diff     │              │
 ├──────────┼──────────┼──────────┼──────────┼──────────┼───────────────┤
 │ ML Train │ Feature  │ Batch    │ Family   │ Cluster  │ IOC Enricher │
 │ Pipeline │ Extract  │ Ingest   │ Detector │ Engine   │ DNS/Geo/WHOIS│

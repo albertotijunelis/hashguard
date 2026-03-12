@@ -67,6 +67,18 @@ class TestBatchAnalyzer:
         results = ba.analyze_directory(str(tmp_path))
         assert len(results) == 2
 
+    @patch("hashguard.reports.analyze")
+    def test_analyze_directory_recursive(self, mock_analyze, tmp_path):
+        """Cover recursive rglob (line 56) and analyze call (lines 66-67)."""
+        sub = tmp_path / "subdir"
+        sub.mkdir()
+        (sub / "nested.txt").write_text("data")
+        (tmp_path / "root.txt").write_text("data")
+        mock_analyze.return_value = _make_result()
+        ba = BatchAnalyzer()
+        results = ba.analyze_directory(str(tmp_path), recursive=True)
+        assert len(results) == 2
+
     def test_analyze_directory_nonexistent(self, tmp_path):
         ba = BatchAnalyzer()
         results = ba.analyze_directory(str(tmp_path / "nonexistent"))
@@ -124,3 +136,29 @@ class TestReportGeneratorHTML:
         output = ReportGenerator.to_html(results)
         assert "<!DOCTYPE html>" in output
         assert "HashGuard" in output
+
+
+class TestBatchAnalyzerNonRecursive:
+    """Cover non-recursive glob branch (line 56)."""
+
+    @patch("hashguard.reports.analyze")
+    def test_non_recursive_glob(self, mock_analyze, tmp_path):
+        sub = tmp_path / "subdir"
+        sub.mkdir()
+        (sub / "nested.txt").write_text("data")
+        (tmp_path / "root.txt").write_text("data")
+        mock_analyze.return_value = _make_result()
+        ba = BatchAnalyzer()
+        results = ba.analyze_directory(str(tmp_path), recursive=False)
+        assert len(results) == 1  # only root.txt, not nested
+
+
+class TestBatchAnalyzerDirectoryException:
+    """Cover exception handler in analyze_directory (lines 66-67)."""
+
+    @patch("hashguard.reports.analyze", side_effect=RuntimeError("parse error"))
+    def test_analyze_directory_exception(self, mock_analyze, tmp_path):
+        (tmp_path / "bad.bin").write_bytes(b"data")
+        ba = BatchAnalyzer()
+        results = ba.analyze_directory(str(tmp_path))
+        assert results == []  # exception logged, not raised

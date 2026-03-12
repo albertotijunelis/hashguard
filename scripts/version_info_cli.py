@@ -21,12 +21,12 @@ VSVersionInfo(
           [
             StringStruct(u'CompanyName', u'HashGuard'),
             StringStruct(u'FileDescription', u'HashGuard CLI - File Verification & Threat Intelligence'),
-            StringStruct(u'FileVersion', u'1.1.0.0'),
+            StringStruct(u'FileVersion', u'1.1.2.0'),
             StringStruct(u'InternalName', u'hashguard'),
             StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Alberto Tijunelis Neto. Elastic License 2.0.'),
             StringStruct(u'OriginalFilename', u'hashguard.exe'),
             StringStruct(u'ProductName', u'HashGuard'),
-            StringStruct(u'ProductVersion', u'1.1.0.0'),
+            StringStruct(u'ProductVersion', u'1.1.2.0'),
           ]
         )
       ]

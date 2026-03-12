@@ -108,26 +108,46 @@ def _get_abuse_ch_key() -> Optional[str]:
         return None
 
 
-def _mb_post(data: dict, timeout: int = 30) -> Optional[dict]:
-    """POST to MalwareBazaar API and return parsed JSON, or None."""
+def _mb_post(data: dict, timeout: int = 120, retries: int = 3) -> Optional[dict]:
+    """POST to MalwareBazaar API and return parsed JSON, or None.
+
+    Retries up to *retries* times on timeout / connection errors with
+    exponential back-off (2s, 4s, 8s…).
+    """
     try:
         import requests
-        headers: Dict[str, str] = {}
-        api_key = _get_abuse_ch_key()
-        if api_key:
-            headers["Auth-Key"] = api_key
-        resp = requests.post(
-            "https://mb-api.abuse.ch/api/v1/",
-            data=data,
-            headers=headers,
-            timeout=timeout,
-            verify=True,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.debug(f"MalwareBazaar API HTTP {resp.status_code}")
-    except Exception as e:
-        logger.debug(f"MalwareBazaar API error: {e}")
+    except ImportError:
+        return None
+
+    headers: Dict[str, str] = {}
+    api_key = _get_abuse_ch_key()
+    if api_key:
+        headers["Auth-Key"] = api_key
+
+    last_err: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
+            resp = requests.post(
+                "https://mb-api.abuse.ch/api/v1/",
+                data=data,
+                headers=headers,
+                timeout=timeout,
+                verify=True,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.debug(f"MalwareBazaar API HTTP {resp.status_code}")
+            return None  # non-retriable HTTP error
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_err = e
+            wait = 2 ** (attempt + 1)
+            logger.debug(f"MalwareBazaar API attempt {attempt + 1}/{retries} failed: {e} — retrying in {wait}s")
+            time.sleep(wait)
+        except Exception as e:
+            logger.debug(f"MalwareBazaar API error: {e}")
+            return None
+
+    logger.warning(f"MalwareBazaar API failed after {retries} retries: {last_err}")
     return None
 
 
@@ -135,12 +155,12 @@ def _mb_get_recent(limit: int = 100) -> List[dict]:
     """Fetch the most recent samples from MalwareBazaar.
 
     Returns a list of sample metadata dicts (sha256_hash, file_type, etc.).
-    The API accepts selector in multiples of 100 (min 100, max 1000).
-    We always fetch at least 100 and truncate to *limit* afterwards.
+    The API only accepts ``selector=100`` — any other value is rejected.
+    For ``limit <= 100`` we fetch 100 and truncate.
+    For ``limit > 100`` we return the 100 available (API hard limit).
     """
-    # Round up to nearest 100 (API rejects values < 100)
-    fetch = min(max(100, ((limit + 99) // 100) * 100), 1000)
-    data = _mb_post({"query": "get_recent", "selector": str(fetch)})
+    # MalwareBazaar only accepts selector=100 — all other values are rejected
+    data = _mb_post({"query": "get_recent", "selector": "100"})
     if data and data.get("query_status") == "ok":
         return data.get("data", [])[:limit]
     return []
@@ -148,7 +168,10 @@ def _mb_get_recent(limit: int = 100) -> List[dict]:
 
 def _mb_get_by_tag(tag: str, limit: int = 100) -> List[dict]:
     """Fetch samples by MalwareBazaar tag (e.g. ``Emotet``)."""
-    fetch = min(max(100, limit), 1000)
+    tag = tag.strip()
+    if not tag:
+        return []
+    fetch = min(max(1, limit), 1000)
     data = _mb_post({"query": "get_taginfo", "tag": tag, "limit": str(fetch)})
     if data and data.get("query_status") == "ok":
         return data.get("data", [])[:limit]
@@ -156,9 +179,22 @@ def _mb_get_by_tag(tag: str, limit: int = 100) -> List[dict]:
 
 
 def _mb_get_by_filetype(file_type: str, limit: int = 100) -> List[dict]:
-    """Fetch samples by file type (e.g. ``exe``, ``dll``, ``docx``)."""
-    fetch = min(max(100, limit), 1000)
-    data = _mb_post({"query": "get_file_type", "file_type": file_type, "limit": str(fetch)})
+    """Fetch samples by file type (e.g. ``exe``, ``dll``, ``docx``).
+
+    Strips leading dots so both ``exe`` and ``.exe`` work.
+    Uses a longer timeout for slow types like ``exe``.
+    """
+    # Strip dots → ".exe" becomes "exe"
+    file_type = file_type.strip().lstrip(".")
+    if not file_type:
+        return []
+    fetch = min(max(1, limit), 1000)
+    # "exe" queries are extremely slow on MalwareBazaar (~25-30s)
+    timeout = 180 if file_type.lower() == "exe" else 120
+    data = _mb_post(
+        {"query": "get_file_type", "file_type": file_type, "limit": str(fetch)},
+        timeout=timeout,
+    )
     if data and data.get("query_status") == "ok":
         return data.get("data", [])[:limit]
     return []
@@ -380,6 +416,54 @@ def _run_local_ingest(
         _current_job.status = "done"
 
 
+# ── Multi-source collection for large datasets ────────────────────────────
+
+# File types ordered by availability on MalwareBazaar (most samples first)
+_MIXED_FILE_TYPES = [
+    "exe", "dll", "docx", "doc", "xls", "xlsx", "pdf", "elf",
+    "apk", "jar", "js", "vbs", "ps1", "bat", "msi", "iso",
+    "lnk", "rtf", "hta", "wsf",
+]
+
+
+def _mb_get_multi(limit: int) -> List[dict]:
+    """Fetch samples from multiple MalwareBazaar file types.
+
+    Collects up to *limit* unique samples by querying each file type
+    in ``_MIXED_FILE_TYPES`` with up to 1000 per call.  Deduplicates by
+    SHA-256 so the same sample is never returned twice.
+    """
+    seen: set = set()
+    combined: List[dict] = []
+
+    # How many to request per type — spread evenly across types, at least 100
+    per_type = max(100, min(1000, (limit // len(_MIXED_FILE_TYPES)) + 100))
+
+    for ftype in _MIXED_FILE_TYPES:
+        if len(combined) >= limit:
+            break
+        needed = limit - len(combined)
+        fetch = min(per_type, 1000, needed + 200)  # over-fetch to account for dupes
+
+        logger.info(f"Mixed ingest: fetching {fetch} samples of type '{ftype}'")
+        batch = _mb_get_by_filetype(ftype, fetch)
+
+        for entry in batch:
+            sha = entry.get("sha256_hash", "")
+            if sha and sha not in seen:
+                seen.add(sha)
+                combined.append(entry)
+                if len(combined) >= limit:
+                    break
+
+        # Rate-limit between API calls
+        if len(combined) < limit:
+            time.sleep(2)
+
+    logger.info(f"Mixed ingest: collected {len(combined)} unique candidates from {len(_MIXED_FILE_TYPES)} types")
+    return combined
+
+
 def start_ingest(
     source: str = "recent",
     limit: int = 100,
@@ -394,12 +478,18 @@ def start_ingest(
     Parameters
     ----------
     source : str
-        ``"recent"`` — most recent samples from MalwareBazaar.
-        ``"tag"`` — samples matching *tag*.
-        ``"filetype"`` — samples matching *file_type*.
+        ``"recent"`` — most recent samples from MalwareBazaar (max 100).
+        ``"tag"`` — samples matching *tag* (max 1000 per call).
+        ``"filetype"`` — samples matching *file_type* (max 1000 per call).
+        ``"mixed"`` — combines multiple file types to reach higher limits
+        (supports 5 000+ by aggregating exe, dll, docx, pdf, elf, apk…).
         ``"local"`` — scan files from a local *directory*.
     limit : int
-        Maximum number of candidates to fetch (capped at 1000).
+        Maximum number of candidates to fetch.
+        - ``recent``: capped at 100 (MalwareBazaar hard limit).
+        - ``tag`` / ``filetype``: capped at 1000 per API call.
+        - ``mixed``: no cap — fetches across multiple file types.
+        - ``local``: no cap.
     tag : str
         MalwareBazaar tag (only used when source="tag").
     file_type : str
@@ -447,14 +537,46 @@ def start_ingest(
         return {"started": True, "source": "local", "candidates": min(limit, len(os.listdir(directory)))}
 
     # ── MalwareBazaar mode ────────────────────────────────────────────
+    # Launch candidate fetching + analysis in a background thread so the
+    # HTTP response returns immediately and the UI can poll progress.
+    t = threading.Thread(
+        target=_fetch_and_ingest,
+        args=(source, limit, tag, file_type, delay, use_vt),
+        daemon=True,
+        name="hashguard-ingest",
+    )
+    t.start()
+    return {"started": True, "source": source, "candidates": 0}
+
+
+def _fetch_and_ingest(
+    source: str, limit: int, tag: str, file_type: str, delay: float, use_vt: bool,
+) -> None:
+    """Fetch candidates from MalwareBazaar, then run the ingest pipeline.
+
+    Runs entirely in a background thread so the API can respond instantly.
+    """
+    global _current_job
+
+    _current_job.current_sha256 = "Fetching candidates..."
+
     logger.info(f"Fetching candidates: source={source} limit={limit} tag={tag} file_type={file_type}")
 
-    if source == "tag" and tag:
-        candidates = _mb_get_by_tag(tag, limit)
+    candidates: List[dict] = []
+
+    if source == "mixed":
+        candidates = _mb_get_multi(limit)
+    elif source == "tag" and tag:
+        candidates = _mb_get_by_tag(tag, min(limit, 1000))
     elif source == "filetype":
-        candidates = _mb_get_by_filetype(file_type, limit)
+        candidates = _mb_get_by_filetype(file_type, min(limit, 1000))
     else:
-        candidates = _mb_get_recent(limit)
+        candidates = _mb_get_recent(min(limit, 100))
+
+    if _stop_event.is_set():
+        _current_job.status = "stopped"
+        _current_job.finished_at = time.time()
+        return
 
     if not candidates:
         api_key = _get_abuse_ch_key()
@@ -464,21 +586,8 @@ def start_ingest(
         _current_job.status = "error"
         _current_job.errors.append(reason)
         _current_job.finished_at = time.time()
-        return {"started": False, "reason": reason}
+        return
 
     _current_job.total_candidates = len(candidates)
-
-    # Run the heavy lifting in a background thread
-    t = threading.Thread(
-        target=_run_ingest,
-        args=(candidates, delay, use_vt),
-        daemon=True,
-        name="hashguard-ingest",
-    )
-    t.start()
-
-    return {
-        "started": True,
-        "source": source,
-        "candidates": len(candidates),
-    }
+    _current_job.current_sha256 = ""
+    _run_ingest(candidates, delay, use_vt)

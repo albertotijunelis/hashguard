@@ -555,3 +555,281 @@ class TestMalwareBazaarAuthHeader:
         query_malwarebazaar(FAKE_SHA256)
         call_kwargs = mock_post.call_args
         assert call_kwargs.kwargs.get("headers", {}).get("Auth-Key") == "test-key"
+
+
+class TestThreatFoxQueryNotOk:
+    """Test ThreatFox query_status != 'ok' branches."""
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_query_status_not_ok(self, mock_req):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"query_status": "no_result", "data": []}
+        mock_req.return_value = mock_resp
+        hit = query_threatfox(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_null_response(self, mock_req):
+        mock_req.return_value = None
+        hit = query_threatfox(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_exception(self, mock_req):
+        mock_req.side_effect = Exception("connection error")
+        hit = query_threatfox(FAKE_SHA256)
+        assert hit.found is False
+
+
+class TestMalwareBazaarExceptionPaths:
+    """Test MalwareBazaar import error and generic exception."""
+
+    @patch("requests.post")
+    def test_request_exception(self, mock_post):
+        mock_post.side_effect = RuntimeError("connection failed")
+        hit = query_malwarebazaar(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("requests.post")
+    def test_non_200_status(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_post.return_value = mock_resp
+        hit = query_malwarebazaar(FAKE_SHA256)
+        assert hit.found is False
+
+
+class TestURLhausExceptionPaths:
+    """Test URLhaus exception paths."""
+
+    @patch("requests.post")
+    def test_request_exception(self, mock_post):
+        mock_post.side_effect = RuntimeError("timeout")
+        hit = query_urlhaus(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("requests.post")
+    def test_non_200_status(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 429
+        mock_post.return_value = mock_resp
+        hit = query_urlhaus(FAKE_SHA256)
+        assert hit.found is False
+
+
+class TestAlienVaultOTXEdge:
+    """Edge cases for AlienVault OTX queries."""
+
+    @patch("requests.get")
+    def test_404_returns_not_found(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_get.return_value = mock_resp
+        hit = query_alienvault_otx(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("requests.get")
+    def test_non_200_returns_not_found(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_get.return_value = mock_resp
+        hit = query_alienvault_otx(FAKE_SHA256)
+        assert hit.found is False
+
+    @patch("requests.get")
+    def test_exception(self, mock_get):
+        mock_get.side_effect = Exception("connection failed")
+        hit = query_alienvault_otx(FAKE_SHA256)
+        assert hit.found is False
+
+
+class TestAbuseIPDBEdge:
+    """Edge cases for AbuseIPDB."""
+
+    def test_no_api_key(self, monkeypatch):
+        monkeypatch.delenv("ABUSEIPDB_API_KEY", raising=False)
+        hit = query_abuseipdb("1.2.3.4", api_key="")
+        assert hit.found is False
+
+    @patch("requests.get")
+    def test_non_200(self, mock_get, monkeypatch):
+        monkeypatch.delenv("ABUSEIPDB_API_KEY", raising=False)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_get.return_value = mock_resp
+        hit = query_abuseipdb("1.2.3.4", api_key="testkey")
+        assert hit.found is False
+
+    @patch("requests.get")
+    def test_exception(self, mock_get, monkeypatch):
+        monkeypatch.delenv("ABUSEIPDB_API_KEY", raising=False)
+        mock_get.side_effect = Exception("timeout")
+        hit = query_abuseipdb("1.2.3.4", api_key="testkey")
+        assert hit.found is False
+
+
+class TestAlienVaultIPEdge:
+    """Edge cases for AlienVault IP."""
+
+    @patch("requests.get")
+    def test_exception(self, mock_get):
+        mock_get.side_effect = Exception("connection error")
+        hit = query_alienvault_ip("1.2.3.4")
+        assert hit.found is False
+
+    @patch("requests.get")
+    def test_non_200(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+        mock_get.return_value = mock_resp
+        hit = query_alienvault_ip("1.2.3.4")
+        assert hit.found is False
+
+
+class TestShodanInternetDBEdge:
+    """Edge cases for Shodan InternetDB."""
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_exception(self, mock_req):
+        mock_req.side_effect = Exception("connection error")
+        hit = query_shodan_internetdb("1.2.3.4")
+        assert hit.found is False
+
+
+class TestIPReputationWithAbuseIPDB:
+    """Test IP reputation with AbuseIPDB API key set."""
+
+    @patch("hashguard.threat_intel.query_shodan_internetdb")
+    @patch("hashguard.threat_intel.query_alienvault_ip")
+    @patch("hashguard.threat_intel.query_abuseipdb")
+    def test_with_abuseipdb_key(self, mock_abuse, mock_otx, mock_shodan, monkeypatch):
+        monkeypatch.setenv("ABUSEIPDB_API_KEY", "testkey")
+        mock_abuse.return_value = ThreatIntelHit(source="AbuseIPDB", found=True)
+        mock_otx.return_value = ThreatIntelHit(source="AlienVault OTX", found=False)
+        mock_shodan.return_value = ThreatIntelHit(source="Shodan InternetDB", found=False)
+        result = query_ip_reputation("1.2.3.4")
+        assert result.total_sources == 3
+        assert result.flagged_count >= 1
+
+
+class TestSafeRequestNoRequests:
+    """Cover _safe_request ImportError path (lines 64-65)."""
+
+    def test_no_requests_library(self):
+        from hashguard.threat_intel import _safe_request
+        with patch.dict("sys.modules", {"requests": None}):
+            result = _safe_request("get", "http://example.com")
+            assert result is None
+
+
+class TestAbuseCHHeadersConfigFallback:
+    """Cover _abuse_ch_headers config fallback (lines 79-80)."""
+
+    def test_config_exception(self, monkeypatch):
+        from hashguard.threat_intel import _abuse_ch_headers
+        monkeypatch.delenv("ABUSE_CH_API_KEY", raising=False)
+        with patch("hashguard.config.HashGuardConfig", side_effect=Exception("no config")):
+            headers = _abuse_ch_headers()
+            # Either no key or key from config — just shouldn't crash
+            assert isinstance(headers, dict)
+
+
+class TestCacheHitPaths:
+    """Cover cache hit return paths (lines 125, 167, 213, 400)."""
+
+    @patch("requests.post")
+    def test_malwarebazaar_cache_hit(self, mock_post):
+        """Second call returns cached result (line 125)."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"query_status": "hash_not_found"}
+        mock_post.return_value = mock_resp
+        query_malwarebazaar("cache_test_mb")
+        result = query_malwarebazaar("cache_test_mb")
+        assert result.source == "MalwareBazaar"
+        assert mock_post.call_count == 1  # only called once, second is cached
+
+    @patch("requests.post")
+    def test_urlhaus_cache_hit(self, mock_post):
+        """Second call returns cached result (line 167)."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"query_status": "hash_not_found"}
+        mock_post.return_value = mock_resp
+        query_urlhaus("cache_test_uh")
+        result = query_urlhaus("cache_test_uh")
+        assert result.source == "URLhaus"
+        assert mock_post.call_count == 1
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_threatfox_cache_hit(self, mock_req):
+        """Second call returns cached result (line 213)."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"query_status": "no_result", "data": []}
+        mock_req.return_value = mock_resp
+        query_threatfox("cache_test_tf")
+        result = query_threatfox("cache_test_tf")
+        assert result.source == "ThreatFox"
+        assert mock_req.call_count == 1
+
+    @patch("hashguard.threat_intel._safe_request")
+    def test_shodan_cache_hit(self, mock_req):
+        """Second call returns cached result (line 400)."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ports": [], "vulns": [], "hostnames": []}
+        mock_req.return_value = mock_resp
+        query_shodan_internetdb("cache_test_ip")
+        result = query_shodan_internetdb("cache_test_ip")
+        assert result.source == "Shodan InternetDB"
+        assert mock_req.call_count == 1
+
+
+class TestImportErrorPaths:
+    """Cover ImportError branches (lines 155, 197, 312, 356, 386)."""
+
+    def test_malwarebazaar_no_requests(self):
+        """ImportError in query_malwarebazaar (line 155)."""
+        with patch.dict("sys.modules", {"requests": None}):
+            hit = query_malwarebazaar("no_req_mb")
+            assert hit.found is False
+
+    def test_urlhaus_no_requests(self):
+        """ImportError in query_urlhaus (line 197)."""
+        with patch.dict("sys.modules", {"requests": None}):
+            hit = query_urlhaus("no_req_uh")
+            assert hit.found is False
+
+    def test_otx_no_requests(self):
+        """ImportError in query_alienvault_otx (line 312)."""
+        with patch.dict("sys.modules", {"requests": None}):
+            hit = query_alienvault_otx("no_req_otx")
+            assert hit.found is False
+
+    def test_alienvault_ip_no_requests(self):
+        """ImportError in query_alienvault_ip (line 356)."""
+        with patch.dict("sys.modules", {"requests": None}):
+            hit = query_alienvault_ip("1.2.3.4")
+            assert hit.found is False
+
+    def test_abuseipdb_no_requests(self):
+        """ImportError in query_abuseipdb (line 386)."""
+        with patch.dict("sys.modules", {"requests": None}):
+            hit = query_abuseipdb("1.2.3.4", api_key="test")
+            assert hit.found is False
+
+
+class TestIPReputationException:
+    """Cover query_ip_reputation exception handler (lines 445-446)."""
+
+    @patch("hashguard.threat_intel.query_shodan_internetdb")
+    @patch("hashguard.threat_intel.query_alienvault_ip")
+    def test_source_raises_exception(self, mock_otx, mock_shodan):
+        """Future raising exception → ThreatIntelHit(source='unknown')."""
+        mock_otx.side_effect = RuntimeError("service down")
+        mock_shodan.return_value = ThreatIntelHit(source="Shodan InternetDB", found=False)
+        result = query_ip_reputation("1.2.3.4")
+        sources = [h.source for h in result.hits]
+        assert "unknown" in sources

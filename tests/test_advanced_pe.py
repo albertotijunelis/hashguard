@@ -483,3 +483,234 @@ class TestAnalyzeAdvancedPEMocked:
             result = analyze_advanced_pe(str(f))
 
         assert result.has_debug_info is True
+
+
+class TestDotNetViaDataDirectory:
+    """Cover .NET detection via DATA_DIRECTORY iteration (lines 233-235)."""
+
+    @patch("hashguard.advanced_pe.HAS_PEFILE", True)
+    def test_dotnet_via_data_directory(self, tmp_path):
+        pe_mock = MagicMock()
+        pe_mock.get_imphash.return_value = ""
+        pe_mock.OPTIONAL_HEADER.MajorLinkerVersion = 14
+        pe_mock.OPTIONAL_HEADER.MinorLinkerVersion = 0
+        # DATA_DIRECTORY with COM_DESCRIPTOR entry
+        entry = MagicMock()
+        entry.name = "IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR"
+        entry.VirtualAddress = 0x2000
+        pe_mock.OPTIONAL_HEADER.DATA_DIRECTORY = [entry]
+        pe_mock.parse_rich_header.return_value = None
+        pe_mock.sections = []
+        pe_mock.get_overlay_data_start_offset.return_value = None
+        pe_mock.close.return_value = None
+        del pe_mock.DIRECTORY_ENTRY_TLS
+        del pe_mock.DIRECTORY_ENTRY_DEBUG
+        del pe_mock.DIRECTORY_ENTRY_COM_DESCRIPTOR
+        del pe_mock.DIRECTORY_ENTRY_IMPORT
+
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.DIRECTORY_ENTRY = {"IMAGE_DIRECTORY_ENTRY_IMPORT": 1}
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"\x00" * 100)
+
+        with patch("hashguard.advanced_pe.pefile", mock_pefile):
+            result = analyze_advanced_pe(str(f))
+
+        assert result.is_dotnet is True
+
+
+class TestTLSCallbackParse:
+    """Cover TLS callback parsing line 295."""
+
+    @patch("hashguard.advanced_pe.HAS_PEFILE", True)
+    def test_tls_callbacks_detected(self, tmp_path):
+        import struct
+        pe_mock = MagicMock()
+        pe_mock.get_imphash.return_value = ""
+        pe_mock.OPTIONAL_HEADER.MajorLinkerVersion = 14
+        pe_mock.OPTIONAL_HEADER.MinorLinkerVersion = 0
+        pe_mock.OPTIONAL_HEADER.DATA_DIRECTORY = []
+        pe_mock.OPTIONAL_HEADER.ImageBase = 0x400000
+        pe_mock.parse_rich_header.return_value = None
+        pe_mock.sections = []
+        pe_mock.get_overlay_data_start_offset.return_value = None
+        pe_mock.close.return_value = None
+        pe_mock.PE_TYPE = 0x10B  # PE32
+
+        # TLS directory
+        tls_struct = MagicMock()
+        tls_struct.AddressOfCallBacks = 0x401000
+        pe_mock.DIRECTORY_ENTRY_TLS.struct = tls_struct
+        pe_mock.get_offset_from_rva.return_value = 0x100
+
+        # Build fake __data__ with one callback address then 0
+        addr1 = struct.pack("<I", 0x401234)
+        addr2 = struct.pack("<I", 0)
+        pe_mock.__data__ = b"\x00" * 0x100 + addr1 + addr2 + b"\x00" * 100
+        pe_mock.__len__ = lambda s: len(pe_mock.__data__)
+
+        del pe_mock.DIRECTORY_ENTRY_DEBUG
+        del pe_mock.DIRECTORY_ENTRY_COM_DESCRIPTOR
+        del pe_mock.DIRECTORY_ENTRY_IMPORT
+
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.DIRECTORY_ENTRY = {"IMAGE_DIRECTORY_ENTRY_IMPORT": 1}
+        mock_pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS = 0x20B
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"\x00" * 100)
+
+        with patch("hashguard.advanced_pe.pefile", mock_pefile):
+            result = analyze_advanced_pe(str(f))
+
+        assert result.tls.has_tls is True
+
+
+class TestAntiAnalysisDetection:
+    """Cover _analyze_anti_analysis and section anomalies."""
+
+    def test_anti_debug_api_detected(self, tmp_path):
+        """Anti-debug API found in imports (lines 329-337)."""
+        from hashguard.advanced_pe import _analyze_anti_analysis
+
+        pe_mock = MagicMock()
+        imp1 = MagicMock()
+        imp1.name = b"IsDebuggerPresent"
+        imp2 = MagicMock()
+        imp2.name = b"CheckRemoteDebuggerPresent"
+        entry = MagicMock()
+        entry.imports = [imp1, imp2]
+        pe_mock.DIRECTORY_ENTRY_IMPORT = [entry]
+
+        content = b"\x00" * 100
+        f = tmp_path / "test.exe"
+        f.write_bytes(content)
+
+        result = _analyze_anti_analysis(pe_mock, f)
+        assert result.total_detections > 0
+        assert any("IsDebuggerPresent" in t["technique"] for t in result.anti_debug_techniques)
+
+    def test_anti_vm_string_detected(self, tmp_path):
+        """Anti-VM string found in file content (lines 347-350)."""
+        from hashguard.advanced_pe import _analyze_anti_analysis
+
+        pe_mock = MagicMock()
+        del pe_mock.DIRECTORY_ENTRY_IMPORT
+        pe_mock.parse_data_directories = MagicMock(side_effect=Exception("no imports"))
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"VMware" * 10 + b"\x00" * 100)
+
+        result = _analyze_anti_analysis(pe_mock, f)
+        assert any("VMware" in t.get("pattern", t.get("description", ""))
+                    for t in result.anti_vm_techniques) or result.total_detections > 0
+
+    def test_content_read_oserror(self, tmp_path):
+        """OSError on file read sets content_lower to empty (lines 343-344)."""
+        from hashguard.advanced_pe import _analyze_anti_analysis
+
+        pe_mock = MagicMock()
+        del pe_mock.DIRECTORY_ENTRY_IMPORT
+        pe_mock.parse_data_directories = MagicMock(side_effect=Exception("no"))
+
+        f = tmp_path / "nonexistent.exe"
+        # Don't create the file — Path.read_bytes will raise
+        result = _analyze_anti_analysis(pe_mock, f)
+        assert result is not None
+
+
+class TestSectionHighEntropy:
+    """Cover section entropy check (lines 454-460)."""
+
+    def test_section_medium_entropy(self):
+        from hashguard.advanced_pe import _analyze_sections
+
+        section = MagicMock()
+        section.Name = b".text\x00\x00\x00"
+        section.Characteristics = 0x40000000  # readable only
+        section.get_entropy.return_value = 7.0  # Between 6.8 and 7.2
+        section.SizeOfRawData = 1000
+        section.Misc_VirtualSize = 1000
+
+        pe_mock = MagicMock()
+        pe_mock.sections = [section]
+
+        anomalies = _analyze_sections(pe_mock)
+        assert any("High entropy" in a.anomaly and "medium" == a.severity for a in anomalies)
+
+
+class TestOverlayException:
+    """Cover overlay analysis exception (lines 410-411)."""
+
+    def test_overlay_exception(self, tmp_path):
+        from hashguard.advanced_pe import _analyze_overlay
+
+        pe_mock = MagicMock()
+        pe_mock.get_overlay_data_start_offset.return_value = 100
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"\x00" * 200)
+
+        # Make stat().st_size work but open() fail
+        with patch("builtins.open", side_effect=OSError("can't read")):
+            result = _analyze_overlay(pe_mock, f)
+            # Should not crash, overlay info may be partial
+            assert result is not None
+
+
+class TestRichHeaderHashException:
+    """Cover rich header hash computation exception (lines 251-252)."""
+
+    def test_rich_header_exception(self, tmp_path):
+        from hashguard.advanced_pe import analyze_advanced_pe
+
+        pe_mock = MagicMock()
+        pe_mock.get_imphash.return_value = ""
+        pe_mock.OPTIONAL_HEADER.MajorLinkerVersion = 14
+        pe_mock.OPTIONAL_HEADER.MinorLinkerVersion = 0
+        pe_mock.OPTIONAL_HEADER.DATA_DIRECTORY = []
+        pe_mock.sections = []
+        del pe_mock.DIRECTORY_ENTRY_DEBUG
+        del pe_mock.DIRECTORY_ENTRY_COM_DESCRIPTOR
+        del pe_mock.DIRECTORY_ENTRY_TLS
+
+        # Rich header parse returns data but struct.pack will fail
+        pe_mock.parse_rich_header.return_value = {"values": ["not_an_int"]}
+
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+        mock_pefile.DIRECTORY_ENTRY = {"IMAGE_DIRECTORY_ENTRY_IMPORT": 1}
+        mock_pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS = 0x20B
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"\x00" * 100)
+
+        with patch("hashguard.advanced_pe.pefile", mock_pefile):
+            result = analyze_advanced_pe(str(f))
+            # Rich header hash exception caught silently
+            assert result.rich_header_hash is None or result.rich_header_hash == ""
+
+
+class TestAnalyzeAdvancedPEOuterException:
+    """Cover outer exception handler (lines 266-267)."""
+
+    def test_outer_exception_caught(self, tmp_path):
+        from hashguard.advanced_pe import analyze_advanced_pe
+
+        pe_mock = MagicMock()
+        pe_mock.get_imphash.side_effect = RuntimeError("fatal")
+        pe_mock.close = MagicMock()
+
+        mock_pefile = MagicMock()
+        mock_pefile.PE.return_value = pe_mock
+
+        f = tmp_path / "test.exe"
+        f.write_bytes(b"MZ" + b"\x00" * 100)
+
+        with patch("hashguard.advanced_pe.pefile", mock_pefile):
+            result = analyze_advanced_pe(str(f))
+            assert result.imphash is None or result.imphash == ""
+            pe_mock.close.assert_called()

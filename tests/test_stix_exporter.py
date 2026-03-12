@@ -550,3 +550,24 @@ class TestSTIXEndpoint:
             assert data["type"] == "bundle"
             malwares = [o for o in data["objects"] if o["type"] == "malware"]
             assert len(malwares) == 0
+
+
+class TestIPValidationEdge:
+    """Cover _is_valid_ipv4 octet range check (lines 84-85)."""
+
+    def test_ip_octet_out_of_range(self):
+        from hashguard.stix_exporter import _is_valid_ipv4
+        assert _is_valid_ipv4("256.1.1.1") is False
+        assert _is_valid_ipv4("1.1.1.-1") is False
+        assert _is_valid_ipv4("0.0.0.0") is True
+        assert _is_valid_ipv4("255.255.255.255") is True
+
+
+class TestExportStixNoStix2:
+    """Cover RuntimeError when stix2 not installed (line 116)."""
+
+    def test_no_stix2(self):
+        from hashguard import stix_exporter
+        with patch.object(stix_exporter, "HAS_STIX2", False):
+            with pytest.raises(RuntimeError, match="stix2 library is required"):
+                stix_exporter.export_stix_bundle({"hashes": {"sha256": "a" * 64}})

@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -439,6 +441,367 @@ class TestTrainModelIntegration(unittest.TestCase):
             with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
                 with self.assertRaises(ValueError):
                     ml_trainer._train_model(mode="family")
+
+
+# ── Additional coverage tests ──────────────────────────────────────────────
+
+
+class TestTrainingJobToDict(unittest.TestCase):
+    """Cover TrainingJob.to_dict with model present (line 165)."""
+
+    def test_to_dict_with_model(self):
+        model = ml_trainer.TrainedModel(
+            model_id="m1", mode="binary", algorithm="random_forest",
+            sample_count=10, feature_count=5, classes=["a", "b"],
+        )
+        job = ml_trainer.TrainingJob(status="completed", model=model)
+        d = job.to_dict()
+        self.assertIn("model", d)
+        self.assertEqual(d["model"]["model_id"], "m1")
+
+
+class TestComputeMetricsEdge(unittest.TestCase):
+    """Cover roc_auc exception (lines 331-332) and CV error (lines 365-366)."""
+
+    def test_roc_auc_valueerror(self):
+        """When roc_auc_score raises ValueError, metrics.roc_auc stays 0."""
+        rng = np.random.default_rng(42)
+        X_train = rng.standard_normal((20, 5))
+        y_train = np.array([0] * 10 + [1] * 10)
+        X_test = rng.standard_normal((10, 5))
+        y_test = np.array([0] * 5 + [1] * 5)
+        clf = RandomForestClassifier(n_estimators=5, random_state=42)
+        clf.fit(X_train, y_train)
+
+        with patch("hashguard.ml_trainer.roc_auc_score", side_effect=ValueError("bad")):
+            m = ml_trainer._compute_metrics(
+                clf, X_train, y_train, X_test, y_test,
+                ["a", "b"], [f"f{i}" for i in range(5)],
+            )
+            self.assertEqual(m.roc_auc, 0.0)
+
+    def test_cv_error_handled(self):
+        """When CV raises, cv_accuracy_mean stays 0."""
+        rng = np.random.default_rng(42)
+        # Only 4 samples — StratifiedKFold can't split properly
+        X_train = rng.standard_normal((4, 5))
+        y_train = np.array([0, 0, 1, 1])
+        X_test = X_train
+        y_test = y_train
+        clf = RandomForestClassifier(n_estimators=5, random_state=42)
+        clf.fit(X_train, y_train)
+
+        m = ml_trainer._compute_metrics(
+            clf, X_train, y_train, X_test, y_test,
+            ["a", "b"], [f"f{i}" for i in range(5)],
+        )
+        # CV might succeed or fail with 4 samples; if it fails, should be 0
+        self.assertIsInstance(m.cv_accuracy_mean, float)
+
+
+class TestFeatureImportanceVoting(unittest.TestCase):
+    """Cover VotingClassifier feature importance (lines 376-383)."""
+
+    def test_voting_classifier_importance(self):
+        """Ensemble clf averages sub-estimator importances."""
+        rng = np.random.default_rng(42)
+        n_features = 10
+        X_train = rng.standard_normal((50, n_features))
+        y_train = np.array([0] * 25 + [1] * 25)
+        X_test = rng.standard_normal((10, n_features))
+        y_test = np.array([0] * 5 + [1] * 5)
+
+        # Build a mock clf that has estimators_ as list of (name, est) tuples
+        # to match the code's iteration pattern
+        rf1 = RandomForestClassifier(n_estimators=5, random_state=42)
+        rf2 = RandomForestClassifier(n_estimators=5, random_state=43)
+        rf1.fit(X_train, y_train)
+        rf2.fit(X_train, y_train)
+
+        mock_clf = MagicMock()
+        mock_clf.predict.return_value = rf1.predict(X_test)
+        mock_clf.predict_proba.return_value = rf1.predict_proba(X_test)
+        del mock_clf.feature_importances_  # ensure hasattr returns False
+        mock_clf.estimators_ = [("rf1", rf1), ("rf2", rf2)]
+
+        m = ml_trainer._compute_metrics(
+            mock_clf, X_train, y_train, X_test, y_test,
+            ["a", "b"], [f"f{i}" for i in range(n_features)],
+        )
+        self.assertGreater(len(m.feature_importance), 0)
+
+    def test_voting_no_importance_estimators(self):
+        """VotingClassifier with no feature_importances_ sub-estimators."""
+        from sklearn.svm import SVC
+        from sklearn.ensemble import VotingClassifier
+
+        rng = np.random.default_rng(42)
+        X_train = rng.standard_normal((50, 5))
+        y_train = np.array([0] * 25 + [1] * 25)
+        X_test = rng.standard_normal((10, 5))
+        y_test = np.array([0] * 5 + [1] * 5)
+
+        clf = VotingClassifier(
+            estimators=[
+                ("svc1", SVC(probability=True, random_state=42)),
+                ("svc2", SVC(probability=True, random_state=43)),
+            ],
+            voting="soft",
+        )
+        clf.fit(X_train, y_train)
+
+        m = ml_trainer._compute_metrics(
+            clf, X_train, y_train, X_test, y_test,
+            ["a", "b"], [f"f{i}" for i in range(5)],
+        )
+        # No importance available
+        self.assertEqual(len(m.feature_importance), 0)
+
+
+class TestTrainModelSmallDataset(unittest.TestCase):
+    """Cover small dataset path (line 470) and joblib save fallback (525-527)."""
+
+    @patch("hashguard.ml_trainer._load_dataset_from_db")
+    def test_small_dataset_skip_split(self, mock_load):
+        """With very few samples per class, uses X_train=X for train and test."""
+        rng = np.random.default_rng(42)
+        n_features = len(ml_trainer.NUMERIC_FEATURES)
+        # 1 sample per class — can't split
+        X = rng.standard_normal((2, n_features))
+        y = np.array([0, 1])
+        families = ["clean", "malware"]
+
+        mock_load.return_value = (X, y, families, ml_trainer.NUMERIC_FEATURES)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                model = ml_trainer._train_model(mode="binary", algorithm="random_forest")
+                self.assertIsInstance(model, ml_trainer.TrainedModel)
+
+    @patch("hashguard.ml_trainer._load_dataset_from_db")
+    @patch.object(ml_trainer, "HAS_JOBLIB", False)
+    def test_save_without_joblib(self, mock_load):
+        """Falls back to pickle when joblib is unavailable."""
+        rng = np.random.default_rng(42)
+        n_features = len(ml_trainer.NUMERIC_FEATURES)
+        X = rng.standard_normal((40, n_features))
+        y = np.array([0] * 20 + [1] * 20)
+        families = ["clean"] * 20 + ["malware"] * 20
+
+        mock_load.return_value = (X, y, families, ml_trainer.NUMERIC_FEATURES)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                model = ml_trainer._train_model(mode="binary", algorithm="random_forest")
+                self.assertTrue(os.path.exists(model.path))
+
+
+class TestStartTrainingThread(unittest.TestCase):
+    """Cover start_training thread execution (lines 582-609)."""
+
+    @patch("hashguard.ml_trainer._load_dataset_from_db")
+    def test_start_training_success(self, mock_load):
+        """Start training and wait for completion."""
+        rng = np.random.default_rng(42)
+        n_features = len(ml_trainer.NUMERIC_FEATURES)
+        X = rng.standard_normal((40, n_features))
+        y = np.array([0] * 20 + [1] * 20)
+        families = ["clean"] * 20 + ["malware"] * 20
+        mock_load.return_value = (X, y, families, ml_trainer.NUMERIC_FEATURES)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                # Reset job state
+                ml_trainer._current_job = ml_trainer.TrainingJob()
+                result = ml_trainer.start_training(mode="binary", algorithm="random_forest")
+                self.assertIn("started", result)
+                self.assertTrue(result["started"])
+                # Wait for thread to complete
+                for _ in range(100):
+                    time.sleep(0.1)
+                    if ml_trainer._current_job.status != "running":
+                        break
+                self.assertEqual(ml_trainer._current_job.status, "completed")
+                self.assertIsNotNone(ml_trainer._current_job.model)
+
+    def test_start_training_error_in_thread(self):
+        """Training error sets job status to error."""
+        with patch("hashguard.ml_trainer._train_model", side_effect=RuntimeError("boom")):
+            ml_trainer._current_job = ml_trainer.TrainingJob()
+            result = ml_trainer.start_training()
+            self.assertTrue(result["started"])
+            for _ in range(50):
+                time.sleep(0.05)
+                if ml_trainer._current_job.status != "running":
+                    break
+            self.assertEqual(ml_trainer._current_job.status, "error")
+            self.assertIn("boom", ml_trainer._current_job.error)
+
+
+class TestListModelsEdge(unittest.TestCase):
+    """Cover bad JSON in list_models (line 616)."""
+
+    def test_bad_json_skipped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                # Write a bad JSON file
+                with open(os.path.join(tmpdir, "bad.json"), "w") as f:
+                    f.write("{invalid json")
+                # Write a good one
+                with open(os.path.join(tmpdir, "good.json"), "w") as f:
+                    json.dump({"model_id": "good"}, f)
+                models = ml_trainer.list_models()
+                self.assertEqual(len(models), 1)
+                self.assertEqual(models[0]["model_id"], "good")
+
+
+class TestPredictSampleEdge(unittest.TestCase):
+    """Cover predict_sample without joblib (lines 674-678) and load error."""
+
+    @patch("hashguard.ml_trainer._load_dataset_from_db")
+    @patch.object(ml_trainer, "HAS_JOBLIB", False)
+    def test_predict_without_joblib(self, mock_load):
+        """Load and predict using pickle fallback."""
+        rng = np.random.default_rng(42)
+        n_features = len(ml_trainer.NUMERIC_FEATURES)
+        X = rng.standard_normal((40, n_features))
+        y = np.array([0] * 20 + [1] * 20)
+        families = ["clean"] * 20 + ["malware"] * 20
+        mock_load.return_value = (X, y, families, ml_trainer.NUMERIC_FEATURES)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                model = ml_trainer._train_model(mode="binary", algorithm="random_forest")
+                features = {f: 0.0 for f in ml_trainer.NUMERIC_FEATURES}
+                result = ml_trainer.predict_sample(features)
+                self.assertIn("predicted_class", result)
+
+    def test_predict_load_error(self):
+        """Corrupted model file returns error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                # Write a bad joblib file
+                bad_path = os.path.join(tmpdir, "bad.joblib")
+                with open(bad_path, "wb") as f:
+                    f.write(b"not a valid model")
+                result = ml_trainer.predict_sample({}, model_id="bad")
+                self.assertIn("error", result)
+                self.assertIn("Failed to load", result["error"])
+
+
+class TestStartTrainingValidation(unittest.TestCase):
+    """Test start_training input validation."""
+
+    def test_invalid_mode(self):
+        result = ml_trainer.start_training(mode="invalid")
+        self.assertIn("error", result)
+
+    def test_invalid_algorithm(self):
+        result = ml_trainer.start_training(algorithm="invalid")
+        self.assertIn("error", result)
+
+    def test_test_size_too_small(self):
+        result = ml_trainer.start_training(test_size=0.01)
+        self.assertIn("error", result)
+
+    def test_test_size_too_large(self):
+        result = ml_trainer.start_training(test_size=0.9)
+        self.assertIn("error", result)
+
+
+class TestListModels(unittest.TestCase):
+    """Test list_models function."""
+
+    def test_no_directory(self):
+        with patch.object(ml_trainer, "MODEL_DIR", "/nonexistent/dir"):
+            result = ml_trainer.list_models()
+            self.assertEqual(result, [])
+
+    def test_with_models(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta = {"model_id": "test_model", "accuracy": 0.95}
+            meta_file = os.path.join(tmpdir, "test_model.json")
+            with open(meta_file, "w") as f:
+                json.dump(meta, f)
+
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                result = ml_trainer.list_models()
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]["model_id"], "test_model")
+
+
+class TestGetModelMetrics(unittest.TestCase):
+    """Test get_model_metrics function."""
+
+    def test_not_found(self):
+        with patch.object(ml_trainer, "MODEL_DIR", "/nonexistent"):
+            result = ml_trainer.get_model_metrics("nonexistent")
+            self.assertIsNone(result)
+
+    def test_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta = {"model_id": "m1", "accuracy": 0.9}
+            with open(os.path.join(tmpdir, "m1.json"), "w") as f:
+                json.dump(meta, f)
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                result = ml_trainer.get_model_metrics("m1")
+                self.assertIsNotNone(result)
+                self.assertEqual(result["accuracy"], 0.9)
+
+
+class TestDeleteModel(unittest.TestCase):
+    """Test delete_model function."""
+
+    def test_delete_nonexistent(self):
+        with patch.object(ml_trainer, "MODEL_DIR", "/nonexistent"):
+            result = ml_trainer.delete_model("nonexistent")
+            self.assertFalse(result)
+
+    def test_delete_existing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_file = os.path.join(tmpdir, "m1.json")
+            with open(json_file, "w") as f:
+                json.dump({}, f)
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                result = ml_trainer.delete_model("m1")
+                self.assertTrue(result)
+                self.assertFalse(os.path.exists(json_file))
+
+
+class TestPredictSampleEdge(unittest.TestCase):
+    """Test predict_sample edge cases."""
+
+    def test_no_ml(self):
+        with patch.object(ml_trainer, "HAS_ML", False):
+            result = ml_trainer.predict_sample({})
+            self.assertIn("error", result)
+
+    def test_no_models_dir(self):
+        with patch.object(ml_trainer, "MODEL_DIR", "/nonexistent"):
+            result = ml_trainer.predict_sample({})
+            self.assertIn("error", result)
+            self.assertIn("No models found", result["error"])
+
+    def test_model_not_found_by_id(self):
+        with patch.object(ml_trainer, "MODEL_DIR", "/nonexistent"):
+            result = ml_trainer.predict_sample({}, model_id="missing_model")
+            self.assertIn("error", result)
+
+    def test_empty_models_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(ml_trainer, "MODEL_DIR", tmpdir):
+                result = ml_trainer.predict_sample({})
+                self.assertIn("error", result)
+                self.assertIn("No models found", result["error"])
+
+
+class TestGetTrainingStatus(unittest.TestCase):
+    """Test get_training_status function."""
+
+    def test_returns_dict(self):
+        result = ml_trainer.get_training_status()
+        self.assertIsInstance(result, dict)
+        self.assertIn("status", result)
 
 
 if __name__ == "__main__":

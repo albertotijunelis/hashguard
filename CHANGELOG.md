@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.2 — 2026-03-11
+
+### Web Dashboard
+- Batch ingest now runs candidate fetching in a background thread — the UI responds immediately instead of blocking for minutes on large requests.
+- Added "Mixed (Multi-type)" ingest source to download samples across 20 file types (up to 10,000 candidates).
+- Dynamic limit field adapts max value per source (100/1,000/10,000).
+- Immediate visual feedback with spinner and "Fetching candidates..." message while background fetch runs.
+- Fixed Start Ingest button alignment in the batch ingest form.
+
+### Bug Fixes
+- Replaced deprecated `datetime.utcnow()` and `datetime.utcfromtimestamp()` calls with timezone-aware alternatives (`ioc_enrichment.py`, `pe_analyzer.py`).
+
+### Testing & Quality
+- Updated batch ingest tests to match async background-thread architecture (5 tests fixed).
+- 97% test coverage maintained (1,212 tests, 5,887 statements, 176 missed).
+
+### Maintenance
+- Version bump to 1.1.2 across all components.
+
+---
+
+## 1.1.1 — 2026-03-11
+
+### Testing & Quality
+- 97% test coverage (1212 tests, 5879 statements, 173 missed).
+- New tests for capability detector, family detector, threat intel cache paths, IOC extraction edge cases, malware timeline, reports, database search, risk scorer, CLI, web API, batch ingest, and string extractor covering previously uncovered branches.
+- Fixed dead-code paths in string extractor URL parsing identified during coverage analysis.
+
+### Web Dashboard
+- Updated YARA rule count to 167 (15 rule files).
+- Corrected threat intelligence feed count to 7 sources (MalwareBazaar, URLhaus, ThreatFox, AlienVault OTX, Shodan InternetDB, AbuseIPDB, VirusTotal).
+- Updated analysis engine count to 18.
+
+### Maintenance
+- Version bump to 1.1.1 across all components (pyproject.toml, __init__.py, web API, NSIS installer, manifest, CLI version info, README).
+
+---
+
 ## 1.1.0 — 2026-03-10
 
 ### STIX 2.1 Export

@@ -160,7 +160,7 @@ def analyze_pe(path: str) -> PEAnalysisResult:
 
     try:
         ts = pe.FILE_HEADER.TimeDateStamp
-        result.compile_time = datetime.datetime.utcfromtimestamp(ts).strftime(
+        result.compile_time = datetime.datetime.fromtimestamp(ts, datetime.UTC).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
     except Exception:

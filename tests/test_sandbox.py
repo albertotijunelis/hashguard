@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -527,3 +528,208 @@ class TestLaunchWindowsSandbox:
         assert result.status == "completed"
         assert result.mode == "windows_sandbox"
         assert result.available is True
+
+
+class TestTakeSnapshotEdges:
+    """Cover snapshot edge cases (lines 190-191, 205-206, 214-217)."""
+
+    @patch("hashguard.sandbox.HAS_PSUTIL", True)
+    def test_process_access_denied(self):
+        """Process NoSuchProcess/AccessDenied caught (lines 190-191)."""
+        import hashguard.sandbox as sb
+        import psutil
+
+        bad_proc = MagicMock()
+        bad_proc.info = property(lambda s: None)
+        type(bad_proc).info = property(lambda s: (_ for _ in ()).throw(psutil.NoSuchProcess(0)))
+
+        with patch("hashguard.sandbox.psutil") as mock_psutil:
+            mock_psutil.NoSuchProcess = psutil.NoSuchProcess
+            mock_psutil.AccessDenied = psutil.AccessDenied
+            # Make process_iter return a proc that raises NoSuchProcess on info access
+            proc_mock = MagicMock()
+            proc_mock.info = {"pid": 1, "name": None, "exe": None, "cmdline": None}
+            mock_psutil.process_iter.return_value = [proc_mock]
+            mock_psutil.net_connections.side_effect = psutil.AccessDenied(0)
+            with patch("hashguard.sandbox._get_watched_dirs", return_value=[]):
+                snap = sb.take_snapshot()
+                assert snap.timestamp != ""
+
+    @patch("hashguard.sandbox.HAS_PSUTIL", True)
+    def test_net_connections_access_denied(self):
+        """Net connections AccessDenied caught (lines 205-206)."""
+        import hashguard.sandbox as sb
+        with patch("hashguard.sandbox.psutil") as mock_psutil:
+            mock_psutil.NoSuchProcess = type("NoSuchProcess", (Exception,), {})
+            mock_psutil.AccessDenied = type("AccessDenied", (Exception,), {})
+            mock_psutil.process_iter.return_value = []
+            mock_psutil.net_connections.side_effect = OSError("access denied")
+            with patch("hashguard.sandbox._get_watched_dirs", return_value=[]):
+                snap = sb.take_snapshot()
+                assert len(snap.network_connections) == 0
+
+    @patch("hashguard.sandbox.HAS_PSUTIL", True)
+    def test_file_system_scan(self, tmp_path):
+        """File system snapshot with os.scandir (lines 214-217)."""
+        import hashguard.sandbox as sb
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("hello")
+        with patch("hashguard.sandbox.psutil") as mock_psutil:
+            mock_psutil.NoSuchProcess = type("NoSuchProcess", (Exception,), {})
+            mock_psutil.AccessDenied = type("AccessDenied", (Exception,), {})
+            mock_psutil.process_iter.return_value = []
+            mock_psutil.net_connections.return_value = []
+            with patch("hashguard.sandbox._get_watched_dirs", return_value=[str(tmp_path)]):
+                snap = sb.take_snapshot()
+                assert str(test_file) in snap.files_in_watched
+
+
+class TestWsbWriteError:
+    """Cover .wsb config write error (lines 419-429)."""
+
+    @patch("hashguard.sandbox._check_windows_sandbox", return_value=True)
+    def test_wsb_write_oserror(self, mock_check, tmp_path):
+        sample = tmp_path / "test.exe"
+        sample.write_bytes(b"MZ")
+        with patch("builtins.open", side_effect=OSError("permission denied")):
+            result = launch_windows_sandbox(str(sample))
+            assert result.status == "error"
+
+
+class TestCompareSnapshotsNewFile:
+    """Cover compare_snapshots non-exe new file path (line 284)."""
+
+    def test_new_txt_file_medium_severity(self):
+        from hashguard.sandbox import compare_snapshots, SystemSnapshot
+        before = SystemSnapshot(timestamp="t0")
+        after = SystemSnapshot(timestamp="t1")
+        after.files_in_watched["/tmp/notes.txt"] = 1234567890.0
+        events = compare_snapshots(before, after)
+        assert any(e.severity == "medium" and e.event_type == "file_write" for e in events)
+
+    def test_new_exe_file_high_severity(self):
+        from hashguard.sandbox import compare_snapshots, SystemSnapshot
+        before = SystemSnapshot(timestamp="t0")
+        after = SystemSnapshot(timestamp="t1")
+        after.files_in_watched["/tmp/malware.exe"] = 1234567890.0
+        events = compare_snapshots(before, after)
+        assert any(e.severity == "high" and e.event_type == "file_write" for e in events)
+
+    def test_new_file_in_startup_critical(self):
+        from hashguard.sandbox import compare_snapshots, SystemSnapshot
+        before = SystemSnapshot(timestamp="t0")
+        after = SystemSnapshot(timestamp="t1")
+        after.files_in_watched["C:\\Users\\user\\AppData\\Startup\\evil.vbs"] = 1234567890.0
+        events = compare_snapshots(before, after)
+        assert any(e.severity == "critical" and e.event_type == "persistence" for e in events)
+
+
+class TestLaunchSandboxSuccess:
+    """Cover subprocess.Popen success path (lines 453-463)."""
+
+    @patch("hashguard.sandbox._check_windows_sandbox", return_value=True)
+    @patch("hashguard.sandbox.time")
+    @patch("hashguard.sandbox.take_snapshot")
+    @patch("hashguard.sandbox.subprocess.Popen")
+    def test_popen_success(self, mock_popen, mock_snap, mock_time, mock_check, tmp_path):
+        from hashguard.sandbox import SystemSnapshot
+        sample = tmp_path / "test.exe"
+        sample.write_bytes(b"MZ")
+        snap = SystemSnapshot(timestamp="t0")
+        mock_snap.return_value = snap
+        mock_time.time.side_effect = [100.0, 131.0]
+        mock_time.sleep = MagicMock()
+
+        result = launch_windows_sandbox(str(sample))
+        assert result.status == "completed"
+        assert any("Windows Sandbox launched" in e.description for e in result.events)
+        mock_popen.assert_called_once()
+
+
+class TestSysmonEventDetection:
+    """Cover Sysmon event detection (line 581)."""
+
+    def test_sysmon_events_found(self):
+        import hashguard.sandbox as sb
+        import json
+        sysmon_data = [
+            "<Event><System><EventID>1</EventID></System></Event>",
+            "<Event><System><EventID>1</EventID></System></Event>",
+        ]
+        # First call (Security log) returns nothing, second call (Sysmon) returns data
+        empty_proc = MagicMock()
+        empty_proc.returncode = 1
+        empty_proc.stdout = ""
+
+        sysmon_proc = MagicMock()
+        sysmon_proc.returncode = 0
+        sysmon_proc.stdout = json.dumps(sysmon_data)
+
+        with patch("hashguard.sandbox.subprocess") as mock_sub:
+            mock_sub.run.side_effect = [empty_proc, sysmon_proc]
+            mock_sub.TimeoutExpired = TimeoutError
+            events = sb.query_etw_process_events(since_seconds=60)
+            assert any("Sysmon" in e.description for e in events)
+
+
+class TestCheckRegistryPersistence:
+    """Cover check_registry_persistence winreg import and body (lines 604-660)."""
+
+    def test_no_winreg(self):
+        from hashguard.sandbox import check_registry_persistence
+        with patch.dict("sys.modules", {"winreg": None}):
+            events = check_registry_persistence()
+            assert isinstance(events, list)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
+    def test_registry_suspicious_value(self):
+        """Cover winreg.OpenKey / EnumValue loop with suspicious indicator."""
+        import winreg
+        from hashguard.sandbox import check_registry_persistence
+
+        mock_key = MagicMock()
+
+        def enum_side_effect(key, i):
+            if i == 0:
+                return ("EvilEntry", "powershell -enc AAAA", 1)
+            raise OSError("no more items")
+
+        with (
+            patch.object(winreg, "OpenKey", return_value=mock_key),
+            patch.object(winreg, "EnumValue", side_effect=enum_side_effect),
+            patch.object(winreg, "CloseKey"),
+        ):
+            events = check_registry_persistence()
+            assert any(e.event_type == "persistence" and "EvilEntry" in e.description
+                       for e in events)
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
+    def test_registry_open_key_oserror(self):
+        """Cover OSError on OpenKey → continue."""
+        import winreg
+        from hashguard.sandbox import check_registry_persistence
+
+        with patch.object(winreg, "OpenKey", side_effect=OSError("access denied")):
+            events = check_registry_persistence()
+            assert events == []
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="winreg only on Windows")
+    def test_registry_non_suspicious_value(self):
+        """Cover the loop path where suspicious is False (no append)."""
+        import winreg
+        from hashguard.sandbox import check_registry_persistence
+
+        mock_key = MagicMock()
+
+        def enum_side_effect(key, i):
+            if i == 0:
+                return ("NormalEntry", "C:\\Program Files\\App\\app.exe", 1)
+            raise OSError("no more")
+
+        with (
+            patch.object(winreg, "OpenKey", return_value=mock_key),
+            patch.object(winreg, "EnumValue", side_effect=enum_side_effect),
+            patch.object(winreg, "CloseKey"),
+        ):
+            events = check_registry_persistence()
+            assert events == []

@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 import pytest
 
@@ -17,6 +18,24 @@ class TestDefaultSignaturesPath:
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("HASHGUARD_SIGNATURES", "/custom/sigs.json")
         assert _default_signatures_path() == "/custom/sigs.json"
+
+    def test_meipass_frozen(self, monkeypatch):
+        monkeypatch.delenv("HASHGUARD_SIGNATURES", raising=False)
+        monkeypatch.setattr("sys._MEIPASS", "/frozen/app", raising=False)
+        result = _default_signatures_path()
+        assert "signatures.json" in result
+
+    def test_pkg_data_not_found(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("HASHGUARD_SIGNATURES", raising=False)
+        if hasattr(sys, "_MEIPASS"):
+            monkeypatch.delattr("sys._MEIPASS")
+        # When the pkg data path doesn't exist, should fall back to project root
+        import hashguard.config as config_mod
+        orig = config_mod.__file__
+        monkeypatch.setattr(config_mod, "__file__", str(tmp_path / "config.py"))
+        result = _default_signatures_path()
+        assert "signatures.json" in result
+        monkeypatch.setattr(config_mod, "__file__", orig)
 
 
 class TestHashGuardConfig:
@@ -37,6 +56,16 @@ class TestHashGuardConfig:
         cfg = HashGuardConfig(vt_api_key=None)
         d = cfg.to_dict()
         assert d["vt_api_key"] is None
+
+    def test_to_dict_abuse_ch_key_redacted(self):
+        cfg = HashGuardConfig(abuse_ch_api_key="secretkey")
+        d = cfg.to_dict()
+        assert d["abuse_ch_api_key"] == "***REDACTED***"
+
+    def test_to_dict_abuse_ch_key_none(self):
+        cfg = HashGuardConfig(abuse_ch_api_key=None)
+        d = cfg.to_dict()
+        assert d["abuse_ch_api_key"] is None
 
     def test_from_file_nonexistent(self, tmp_path):
         cfg = HashGuardConfig.from_file(str(tmp_path / "nope.json"))
