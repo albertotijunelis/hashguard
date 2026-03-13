@@ -283,7 +283,7 @@ class TestRunIngest:
         batch_ingest._current_job = IngestJob()
         batch_ingest._stop_event.clear()
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_skips_existing(self, mock_exists, mock_dl, mock_analyse):
@@ -294,7 +294,7 @@ class TestRunIngest:
         mock_dl.assert_not_called()
         mock_analyse.assert_not_called()
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_download_failure(self, mock_exists, mock_dl, mock_analyse):
@@ -305,7 +305,7 @@ class TestRunIngest:
         assert batch_ingest._current_job.failed == 1
         mock_analyse.assert_not_called()
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_successful_analysis(self, mock_exists, mock_dl, mock_analyse):
@@ -322,7 +322,7 @@ class TestRunIngest:
         assert batch_ingest._current_job.analysed == 1
         assert batch_ingest._current_job.status == "done"
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_analysis_failure(self, mock_exists, mock_dl, mock_analyse):
@@ -337,7 +337,7 @@ class TestRunIngest:
         assert batch_ingest._current_job.downloaded == 1
         assert batch_ingest._current_job.failed == 1
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_stop_event_halts_processing(self, mock_exists, mock_dl, mock_analyse):
@@ -348,7 +348,7 @@ class TestRunIngest:
         assert batch_ingest._current_job.downloaded == 0
         assert batch_ingest._current_job.status == "done"
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._mb_download_sample")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_multiple_candidates(self, mock_exists, mock_dl, mock_analyse):
@@ -442,7 +442,7 @@ class TestStartIngestLocal:
         assert result["started"] is False
         assert "Invalid" in result["reason"]
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_local_ingest_analyses_files(self, mock_exists, mock_analyse):
         mock_exists.return_value = False
@@ -659,7 +659,7 @@ class TestRunLocalIngestEdge:
         batch_ingest._current_job = IngestJob()
         batch_ingest._stop_event.clear()
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_unreadable_file(self, mock_exists, mock_analyse):
         """OSError during SHA-256 computation (lines 391-394)."""
@@ -677,7 +677,7 @@ class TestRunLocalIngestEdge:
                 _run_local_ingest(tmpdir, use_vt=False, delay=0)
             assert batch_ingest._current_job.failed == 1
 
-    @patch("hashguard.batch_ingest._analyse_file", return_value=None)
+    @patch("hashguard.batch_ingest._analyse_file_batch", return_value=None)
     @patch("hashguard.batch_ingest._already_in_dataset", return_value=False)
     def test_analysis_failure_in_local(self, mock_exists, mock_analyse):
         """Analysis failure bumps failed counter (lines 408-409)."""
@@ -757,7 +757,7 @@ class TestStartIngestMixed:
             time.sleep(0.1)
         mock_multi.assert_called_once_with(5)
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_local_skips_existing(self, mock_exists, mock_analyse):
         mock_exists.return_value = True
@@ -785,7 +785,7 @@ class TestRunLocalIngest:
         batch_ingest._current_job = IngestJob()
         batch_ingest._stop_event.clear()
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_processes_files(self, mock_exists, mock_analyse):
         mock_exists.return_value = False
@@ -798,7 +798,7 @@ class TestRunLocalIngest:
         assert batch_ingest._current_job.analysed == 2
         assert batch_ingest._current_job.status == "done"
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_respects_limit(self, mock_exists, mock_analyse):
         mock_exists.return_value = False
@@ -810,7 +810,7 @@ class TestRunLocalIngest:
             _run_local_ingest(tmpdir, limit=3, delay=0)
         assert batch_ingest._current_job.total_candidates == 3
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_stop_event_halts(self, mock_exists, mock_analyse):
         mock_exists.return_value = False
@@ -823,7 +823,7 @@ class TestRunLocalIngest:
         assert batch_ingest._current_job.analysed == 0
         assert batch_ingest._current_job.status == "done"
 
-    @patch("hashguard.batch_ingest._analyse_file")
+    @patch("hashguard.batch_ingest._analyse_file_batch")
     @patch("hashguard.batch_ingest._already_in_dataset")
     def test_ignores_subdirectories(self, mock_exists, mock_analyse):
         mock_exists.return_value = False

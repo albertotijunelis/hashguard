@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.1.3 — 2026-03-12
+
+### ML Training & Classification
+- Trained binary classification model (Random Forest, 12,728 samples, 63 features): 99.18% accuracy, F1 99.32%, ROC AUC 99.97%.
+- Trained family classification model (Random Forest, 68 classes): 98.65% accuracy, F1 98.50%, ROC AUC 99.99%.
+- Real-time classification active: every analyzed file gets an ML prediction injected into results.
+
+### Dataset & Ingest
+- Batch ingest of 12,728 samples (7,752 malicious from MalwareBazaar + 4,976 benign system files).
+- Feature extractor now accepts `mb_metadata` for ground-truth labels from MalwareBazaar.
+- Threat-intel features derived from MalwareBazaar metadata during ingest.
+- Benign ingest uses `os.walk` recursion across SysWOW64 + Program Files directories.
+
+### Security
+- HMAC-SHA256 integrity verification on serialized ML models (save and load).
+- `.gitignore` hardened: `*.db`, `*.sqlite*`, `*.joblib`, `*.pkl`, `*.hmac`, `models/` excluded from version control.
+- Database and model files confirmed never pushed to GitHub.
+
+### Web Dashboard
+- IOC listing rewritten: expandable detail lists for 9 IOC categories (URLs, IPs, domains, emails, crypto wallets, PowerShell commands, suspicious paths, user agents, registry keys).
+- Each IOC item has a copy-to-clipboard button with hover reveal.
+- Color-coded IOC categories with count badges.
+
+### Bug Fixes
+- Fixed IOC graph not showing IOC nodes: `build_graph()` now handles flat `to_dict()` structure with fallback, and uses correct `ips` key instead of `ip_addresses`.
+- Added benign source option to dashboard ingest dropdown.
+
+### Testing & Quality
+- 1,212 tests passing, 93% coverage (6,247 statements, 468 missed).
+- Updated batch ingest test mocks from `_analyse_file` to `_analyse_file_batch`.
+- Database schema migration with new indexes for `label_family`, `label_source`, `label_is_malicious`.
+
+### Maintenance
+- Version bump to 1.1.3 across all components.
+
+---
+
 ## 1.1.2 — 2026-03-11
 
 ### Web Dashboard

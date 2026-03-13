@@ -5,12 +5,12 @@ Advanced malware analysis platform with static analysis, capability detection,
 ML classification, fuzzy hashing, IOC graphing, timeline analysis, and a
 modern web dashboard.
 
-Version: 1.1.2
+Version: 1.1.3
 License: Elastic-2.0
 Author: Alberto Tijunelis Neto
 """
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 __author__ = "Alberto Tijunelis Neto"
 __license__ = "Elastic-2.0"
 

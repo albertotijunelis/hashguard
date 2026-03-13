@@ -59,7 +59,7 @@ try:
 except ImportError:
     HAS_FASTAPI = False
 
-app = FastAPI(title="HashGuard", version="1.1.2", docs_url="/api/docs") if HAS_FASTAPI else None
+app = FastAPI(title="HashGuard", version="1.1.3", docs_url="/api/docs") if HAS_FASTAPI else None
 
 if app:
     app.add_middleware(
@@ -591,19 +591,27 @@ if app:
         try:
             from hashguard.batch_ingest import start_ingest
 
-            # Cap per source: recent=100, tag/filetype=1000, mixed/local=unlimited
+            # Cap per source: recent=100, tag/filetype=1000, mixed/local/continuous=unlimited
             if source == "recent":
                 safe_limit = min(limit, 100)
             elif source in ("tag", "filetype"):
                 safe_limit = min(limit, 1000)
             else:
-                safe_limit = limit  # mixed and local have no hard cap
+                safe_limit = limit  # mixed, local, continuous have no hard cap
+
+            if source == "benign":
+                ingest_delay = 0.05
+            elif source == "continuous":
+                ingest_delay = 0.3
+            else:
+                ingest_delay = 1.0
 
             result = start_ingest(
                 source=source,
                 limit=safe_limit,
                 tag=tag,
                 file_type=file_type,
+                delay=ingest_delay,
                 directory=directory,
             )
             return JSONResponse(content=result)
@@ -746,7 +754,7 @@ def start_server(host: str = "127.0.0.1", port: int = 8000, open_browser: bool =
     banner = (
         "\n"
         "    +------------------------------------------------------+\n"
-        "    |    HashGuard v1.1.2 - Malware Research Platform       |\n"
+        "    |    HashGuard v1.1.3 - Malware Research Platform       |\n"
         "    |                                                       |\n"
         f"    |     Dashboard: {url:<39s}|\n"
         f"    |     API Docs:  {url + '/api/docs':<39s}|\n"

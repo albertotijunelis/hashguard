@@ -23,11 +23,13 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import queue
 import shutil
 import tempfile
 import threading
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -63,6 +65,13 @@ class IngestJob:
         if self.started_at:
             end = self.finished_at or time.time()
             elapsed = round(end - self.started_at, 1)
+        rate = 0.0
+        if elapsed > 0 and self.analysed > 0:
+            rate = round(self.analysed / (elapsed / 60), 1)  # samples/min
+        eta_minutes = 0
+        remaining = self.total_candidates - self.analysed - self.skipped_existing - self.failed
+        if rate > 0 and remaining > 0:
+            eta_minutes = round(remaining / rate)
         return {
             "source": self.source,
             "status": self.status,
@@ -73,6 +82,8 @@ class IngestJob:
             "failed": self.failed,
             "current_sha256": self.current_sha256,
             "elapsed_seconds": elapsed,
+            "rate_per_minute": rate,
+            "eta_minutes": eta_minutes,
             "errors": self.errors[-20:],  # last 20 errors
         }
 
@@ -274,6 +285,57 @@ def _analyse_file(file_path: str, use_vt: bool = False) -> Optional[dict]:
         return None
 
 
+def _analyse_file_batch(file_path: str, mb_metadata: Optional[dict] = None) -> Optional[dict]:
+    """Run a streamlined analysis for batch/continuous ingest.
+
+    Skips expensive post-processing (auto-unpack, IOC graph, timeline)
+    that are unnecessary for dataset feature extraction.  The core
+    scanner output + feature extraction + DB storage are preserved.
+
+    Parameters
+    ----------
+    mb_metadata:
+        Optional MalwareBazaar entry dict.  When provided, ground-truth
+        labels (family, tags) are passed to the feature extractor so the
+        dataset uses analyst-verified labels instead of the scanner's
+        own verdict.
+    """
+    try:
+        from hashguard.scanner import analyze
+        from hashguard.config import get_default_config
+        from hashguard.web.api import _sanitize_for_json
+
+        config = get_default_config()
+        result = analyze(file_path, vt=False, config=config, batch_mode=True)
+        result_dict = result.to_dict()
+
+        # Store in database
+        sample_id = None
+        try:
+            from hashguard.database import store_sample, store_timeline_event
+            sample_id = store_sample(result_dict)
+            result_dict["sample_id"] = sample_id
+        except Exception as e:
+            logger.debug(f"Database storage error: {e}")
+
+        # Extract & store ML dataset features (the whole point of batch ingest)
+        try:
+            from hashguard.feature_extractor import extract_features
+            from hashguard.database import store_dataset_features
+
+            feats = extract_features(file_path, result_dict, mb_metadata=mb_metadata)
+            sha = result_dict.get("hashes", {}).get("sha256", "")
+            if sha and sample_id:
+                store_dataset_features(sample_id, sha, feats)
+        except Exception as e:
+            logger.debug(f"Dataset feature extraction error: {e}")
+
+        return _sanitize_for_json(result_dict)
+    except Exception as e:
+        logger.warning(f"Batch analysis failed for {file_path}: {e}")
+        return None
+
+
 def _already_in_dataset(sha256: str) -> bool:
     """Check if a SHA-256 is already stored in the samples table."""
     try:
@@ -323,8 +385,8 @@ def _run_ingest(
 
             _current_job.downloaded += 1
 
-            # Analyse (features are extracted & stored automatically by the hook)
-            result = _analyse_file(file_path, use_vt=use_vt)
+            # Analyse — batch mode extracts features + stores in dataset
+            result = _analyse_file_batch(file_path, mb_metadata=entry)
             if result:
                 _current_job.analysed += 1
             else:
@@ -401,12 +463,138 @@ def _run_local_ingest(
 
         _current_job.downloaded += 1  # counts as "loaded" for local
 
-        result = _analyse_file(file_path, use_vt=use_vt)
+        result = _analyse_file_batch(file_path)
         if result:
             _current_job.analysed += 1
         else:
             _current_job.failed += 1
             _current_job.errors.append(f"analysis_failed:{sha256[:16]}")
+
+        time.sleep(delay)
+
+    _current_job.current_sha256 = ""
+    _current_job.finished_at = time.time()
+    if _current_job.status in ("running", "stopping"):
+        _current_job.status = "done"
+
+
+# ── Benign sample collection ──────────────────────────────────────────────
+
+# Directories containing known-clean binaries for benign class balance.
+_BENIGN_DIRS_WINDOWS = [
+    os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32"),
+    os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "SysWOW64"),
+    os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Common Files"),
+    os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+]
+
+# Extensions considered for benign collection
+_BENIGN_EXTENSIONS = {".exe", ".dll", ".sys", ".ocx", ".cpl", ".scr"}
+
+
+def _run_benign_ingest(
+    limit: int = 5000,
+    delay: float = 0.05,
+) -> None:
+    """Ingest known-clean files from system directories for class balance.
+
+    Scans signed Windows system binaries from System32 / Program Files.
+    Labels them as ``label_is_malicious=0``, ``label_source="benign_system"``.
+    """
+    global _current_job
+
+    files: List[str] = []
+    for base_dir in _BENIGN_DIRS_WINDOWS:
+        if not os.path.isdir(base_dir):
+            continue
+        try:
+            for root, _dirs, names in os.walk(base_dir):
+                for name in names:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in _BENIGN_EXTENSIONS:
+                        continue
+                    path = os.path.join(root, name)
+                    if os.path.isfile(path):
+                        files.append(path)
+                    if len(files) >= limit:
+                        break
+                if len(files) >= limit:
+                    break
+        except PermissionError:
+            continue
+        if len(files) >= limit:
+            break
+
+    _current_job.total_candidates = len(files)
+    if not files:
+        _current_job.status = "error"
+        _current_job.errors.append("No benign system files found")
+        _current_job.finished_at = time.time()
+        return
+
+    logger.info(f"Benign ingest: found {len(files)} system files")
+
+    for file_path in files:
+        if _stop_event.is_set():
+            _current_job.status = "stopping"
+            break
+
+        try:
+            h = hashlib.sha256()
+            with open(file_path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    h.update(chunk)
+            sha256 = h.hexdigest()
+        except (OSError, PermissionError):
+            _current_job.failed += 1
+            continue
+
+        _current_job.current_sha256 = sha256
+
+        if _already_in_dataset(sha256):
+            _current_job.skipped_existing += 1
+            continue
+
+        _current_job.downloaded += 1
+
+        # Use a synthetic MB-like metadata dict to mark as benign
+        benign_meta = {
+            "signature": "",
+            "tags": [],
+            "_benign_source": "system",
+        }
+
+        try:
+            from hashguard.scanner import analyze
+            from hashguard.config import get_default_config
+            from hashguard.feature_extractor import extract_features
+            from hashguard.database import store_sample, store_dataset_features
+
+            config = get_default_config()
+            result = analyze(file_path, vt=False, config=config, batch_mode=True)
+            result_dict = result.to_dict()
+
+            sample_id = store_sample(result_dict)
+
+            feats = extract_features(file_path, result_dict)
+            # Override labels: these are KNOWN benign
+            feats["label_source"] = "benign_system"
+            feats["label_is_malicious"] = 0
+            feats["label_verdict"] = "clean"
+            feats["label_family"] = ""
+            feats["label_family_confidence"] = 1.0
+            feats["label_mb_tags"] = "[]"
+            feats["label_mb_signature"] = ""
+
+            sha = result_dict.get("hashes", {}).get("sha256", "")
+            if sha and sample_id:
+                store_dataset_features(sample_id, sha, feats)
+
+            _current_job.analysed += 1
+        except Exception as e:
+            _current_job.failed += 1
+            _current_job.errors.append(f"benign_failed:{sha256[:16]}")
+            logger.debug(f"Benign analysis failed: {e}")
 
         time.sleep(delay)
 
@@ -423,6 +611,20 @@ _MIXED_FILE_TYPES = [
     "exe", "dll", "docx", "doc", "xls", "xlsx", "pdf", "elf",
     "apk", "jar", "js", "vbs", "ps1", "bat", "msi", "iso",
     "lnk", "rtf", "hta", "wsf",
+]
+
+# Popular MalwareBazaar tags for diverse dataset collection
+_POPULAR_TAGS = [
+    "Emotet", "AgentTesla", "Formbook", "Remcos", "LockBit",
+    "RedLine", "AsyncRAT", "NjRAT", "GuLoader", "Qakbot",
+    "IcedID", "Cobalt Strike", "Raccoon", "Vidar", "SmokeLoader",
+    "TrickBot", "Dridex", "BazarLoader", "Conti", "REvil",
+    "DarkSide", "Ryuk", "Maze", "Phobos", "Dharma",
+    "Stop", "XMRig", "CoinMiner", "Mirai", "Gafgyt",
+    "Gh0stRAT", "PlugX", "ShadowPad", "WannaCry", "Petya",
+    "BlackCat", "AvosLocker", "Hive", "Royal", "Play",
+    "Medusa", "Akira", "BianLian", "NoEscape", "8Base",
+    "Snake", "BlackBasta", "Vice Society", "Cuba", "Clop",
 ]
 
 
@@ -483,12 +685,18 @@ def start_ingest(
         ``"filetype"`` — samples matching *file_type* (max 1000 per call).
         ``"mixed"`` — combines multiple file types to reach higher limits
         (supports 5 000+ by aggregating exe, dll, docx, pdf, elf, apk…).
+        ``"continuous"`` — loops through tags + file types continuously
+        until *limit* samples are analysed or stopped manually.  Designed
+        for building large datasets (200k+).
+        ``"benign"`` — scans known-clean system binaries (System32, Program
+        Files) to collect benign samples for class balance.
         ``"local"`` — scan files from a local *directory*.
     limit : int
         Maximum number of candidates to fetch.
         - ``recent``: capped at 100 (MalwareBazaar hard limit).
         - ``tag`` / ``filetype``: capped at 1000 per API call.
         - ``mixed``: no cap — fetches across multiple file types.
+        - ``continuous``: target total samples to analyse.
         - ``local``: no cap.
     tag : str
         MalwareBazaar tag (only used when source="tag").
@@ -536,6 +744,17 @@ def start_ingest(
         t.start()
         return {"started": True, "source": "local", "candidates": min(limit, len(os.listdir(directory)))}
 
+    # ── Benign system files mode ──────────────────────────────────────
+    if source == "benign":
+        t = threading.Thread(
+            target=_run_benign_ingest,
+            args=(limit, delay),
+            daemon=True,
+            name="hashguard-ingest",
+        )
+        t.start()
+        return {"started": True, "source": "benign", "candidates": 0}
+
     # ── MalwareBazaar mode ────────────────────────────────────────────
     # Launch candidate fetching + analysis in a background thread so the
     # HTTP response returns immediately and the UI can poll progress.
@@ -557,6 +776,11 @@ def _fetch_and_ingest(
     Runs entirely in a background thread so the API can respond instantly.
     """
     global _current_job
+
+    # ── Continuous mode ───────────────────────────────────────────────
+    if source == "continuous":
+        _run_continuous_ingest(limit, delay, use_vt)
+        return
 
     _current_job.current_sha256 = "Fetching candidates..."
 
@@ -591,3 +815,169 @@ def _fetch_and_ingest(
     _current_job.total_candidates = len(candidates)
     _current_job.current_sha256 = ""
     _run_ingest(candidates, delay, use_vt)
+
+
+def _run_continuous_ingest(
+    target: int,
+    delay: float = 0.5,
+    use_vt: bool = False,
+) -> None:
+    """Continuously fetch and analyse samples until *target* is reached.
+
+    Cycles through:
+    1. Recent samples (every cycle)
+    2. Each popular tag (1000 per tag)
+    3. Each file type (1000 per type)
+
+    Automatically deduplicates via the database.  Crash-resilient: on
+    restart, ``_already_in_dataset`` skips previously analysed samples.
+    Progress is tracked via ``_current_job`` and visible in the dashboard.
+    """
+    global _current_job
+
+    _current_job.total_candidates = target
+    cycle = 0
+
+    quarantine_dir = tempfile.mkdtemp(prefix="hashguard_continuous_")
+    try:
+        while _current_job.analysed < target:
+            if _stop_event.is_set():
+                _current_job.status = "stopping"
+                break
+
+            cycle += 1
+            logger.info(
+                f"Continuous ingest cycle {cycle}: "
+                f"{_current_job.analysed}/{target} analysed, "
+                f"{_current_job.skipped_existing} skipped"
+            )
+
+            # -- 1. Recent samples --
+            _current_job.current_sha256 = "Fetching recent samples..."
+            recent = _mb_get_recent(100)
+            _process_candidates(recent, quarantine_dir, delay, use_vt, target)
+            if _stop_event.is_set() or _current_job.analysed >= target:
+                break
+
+            # -- 2. Popular tags --
+            for tag in _POPULAR_TAGS:
+                if _stop_event.is_set() or _current_job.analysed >= target:
+                    break
+                _current_job.current_sha256 = f"Fetching tag: {tag}..."
+                batch = _mb_get_by_tag(tag, 1000)
+                _process_candidates(batch, quarantine_dir, delay, use_vt, target)
+                time.sleep(0.5)  # rate-limit between API calls
+
+            if _stop_event.is_set() or _current_job.analysed >= target:
+                break
+
+            # -- 3. File types --
+            for ftype in _MIXED_FILE_TYPES:
+                if _stop_event.is_set() or _current_job.analysed >= target:
+                    break
+                _current_job.current_sha256 = f"Fetching type: {ftype}..."
+                batch = _mb_get_by_filetype(ftype, 1000)
+                _process_candidates(batch, quarantine_dir, delay, use_vt, target)
+                time.sleep(0.5)
+
+            # Wait before next cycle (APIs may have new data)
+            if _current_job.analysed < target and not _stop_event.is_set():
+                _current_job.current_sha256 = f"Cycle {cycle} done — waiting 30s for new data..."
+                logger.info(f"Cycle {cycle} complete. Waiting 30s before next cycle.")
+                for _ in range(30):
+                    if _stop_event.is_set():
+                        break
+                    time.sleep(1)
+    finally:
+        shutil.rmtree(quarantine_dir, ignore_errors=True)
+        _current_job.current_sha256 = ""
+        _current_job.finished_at = time.time()
+        if _current_job.status in ("running", "stopping"):
+            _current_job.status = "done"
+
+
+def _process_candidates(
+    candidates: List[dict],
+    quarantine_dir: str,
+    delay: float,
+    use_vt: bool,
+    target: int,
+) -> None:
+    """Download and analyse a batch of candidates using parallel workers.
+
+    Uses a thread pool to overlap network I/O (downloads) with CPU-bound
+    analysis.  Each worker handles one sample end-to-end to avoid shared
+    state issues with file paths.
+    """
+    global _current_job
+
+    # Pre-filter already-known samples in bulk
+    fresh: List[dict] = []
+    for entry in candidates:
+        sha256 = entry.get("sha256_hash", "")
+        if not sha256:
+            continue
+        if _already_in_dataset(sha256):
+            _current_job.skipped_existing += 1
+        else:
+            fresh.append(entry)
+
+    if not fresh:
+        return
+
+    logger.info(f"Processing {len(fresh)} new candidates ({len(candidates) - len(fresh)} skipped, analysed={_current_job.analysed}, target={target})")
+
+    # Determine worker count — balance between API rate limits and throughput
+    workers = min(4, len(fresh))
+
+    def _process_one(entry: dict) -> Optional[str]:
+        """Download + analyse a single sample. Returns sha256 on success."""
+        if _stop_event.is_set() or _current_job.analysed >= target:
+            return None
+        sha256 = entry["sha256_hash"]
+        _current_job.current_sha256 = sha256
+
+        file_path = _mb_download_sample(sha256, quarantine_dir)
+        if not file_path:
+            _current_job.failed += 1
+            _current_job.errors.append(f"download_failed:{sha256[:16]}")
+            return None
+
+        _current_job.downloaded += 1
+
+        result = _analyse_file_batch(file_path, mb_metadata=entry)
+        if result:
+            _current_job.analysed += 1
+        else:
+            _current_job.failed += 1
+            _current_job.errors.append(f"analysis_failed:{sha256[:16]}")
+
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+        # Log progress periodically
+        if _current_job.analysed % 100 == 0 and _current_job.analysed > 0:
+            logger.info(
+                f"Progress: {_current_job.analysed}/{target} analysed, "
+                f"{_current_job.failed} failed, "
+                f"{_current_job.skipped_existing} skipped"
+            )
+        return sha256
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ingest") as pool:
+        futures = {}
+        for entry in fresh:
+            if _stop_event.is_set() or _current_job.analysed >= target:
+                break
+            f = pool.submit(_process_one, entry)
+            futures[f] = entry
+            # Small stagger to avoid overwhelming the API
+            time.sleep(delay)
+
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception as e:
+                logger.debug(f"Worker error: {e}")

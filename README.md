@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/albertotijunelis/hashguard/releases/latest"><img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Download-v1.1.2-FF6600?style=for-the-badge" alt="Download"></a>
+  <a href="https://github.com/albertotijunelis/hashguard/releases/latest"><img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Download-v1.1.3-FF6600?style=for-the-badge" alt="Download"></a>
   <a href="https://pypi.org/project/hashguard/"><img src="https://img.shields.io/badge/%F0%9F%93%A6_PyPI-hashguard-FF6600?style=for-the-badge" alt="PyPI"></a>
 </p>
 
@@ -24,26 +24,13 @@
 
 HashGuard is a professional malware research platform that combines static analysis, ML classification, behavioral detection, script deobfuscation, sandbox monitoring, 167 YARA rules, multi-source threat intelligence, fuzzy hashing, IOC graphing, and a web dashboard — accessible via CLI, web browser, or Python API.
 
-## What's new in v1.1.2
+## What's new in v1.1.3
 
-- **STIX 2.1 Export** — one-click export of analysis results as a STIX 2.1 Bundle; compatible with MISP, OpenCTI, TheHive, Splunk SOAR
-- **CI/CD Pipeline** — GitHub Actions: test matrix (3.9–3.13 × Ubuntu/Windows), CodeQL security scanning, automated release builds
-- **ML Training Pipeline** — train your own models (Random Forest, Gradient Boosting, Ensemble) on 63 rich features extracted from analysis results; real-time classification on every upload
-- **Batch Ingest** — bulk sample ingestion from MalwareBazaar (abuse.ch Auth-Key + selectors) and local directories; automatic feature extraction and dataset building
-- **Dual ML Classification** — built-in 5-class classifier (22 PE features) + custom trained model (63 features) with class probabilities and model management
-- **Web Dashboard** — FastAPI + Alpine.js dark-themed SPA with file upload, IOC graphs, timelines, cluster visualization, ML training controls, and model management
-- **ML Classification** — Gradient Boosted Trees + Random Forest ensemble (benign / trojan / ransomware / miner / stealer)
-- **Script Deobfuscation** — PowerShell, VBScript, JavaScript, Batch, HTA deobfuscation via pattern matching
-- **Behavioral Sandbox** — Windows Sandbox integration with ETW-based process monitoring and system snapshot diffing
-- **Unpacker** — UPX auto-unpacking, packer/protector detection, Unicorn CPU emulation (experimental)
-- **158 YARA Rules** — expanded from 28 to 158 rules across 14 categories (C2, evasion, persistence, exploits, stealers, ransomware, rootkits, documents, miners, destructive...)
-- **Threat Intelligence** — added ThreatFox + Shodan InternetDB (now 7 sources total)
-- **IOC Enrichment** — passive DNS, IP geolocation, WHOIS, domain age analysis
-- **IOC Graphs** — visual relationship mapping (file → domain → IP → family) with vis.js
-- **Malware Clustering** — DBSCAN on ML feature vectors + fuzzy hash similarity + imphash grouping
-- **Family Detection** — YARA metadata, threat intel, imphash patterns, string signatures
-- **Timeline Analysis** — delivery → execution → persistence → C2 → action phase sequencing
-- **SQLite Database** — persistent storage for all analysis results, IOCs, behaviors, clusters, and ML datasets
+- **ML Models Trained** — Binary classifier: 99.18% accuracy, F1 99.32%, ROC AUC 99.97% (12,728 samples). Family classifier: 98.65% accuracy across 68 malware families.
+- **HMAC Model Security** — SHA-256 HMAC integrity verification on all serialized ML models (save & load).
+- **IOC Detail Listing** — Expandable IOC lists with 9 categories (URLs, IPs, domains, emails, crypto wallets, etc.), copy-to-clipboard buttons, color-coded badges.
+- **IOC Graph Fix** — Graph now correctly displays IOC nodes from flat `to_dict()` structure.
+- **Dataset: 12,728 samples** — 7,752 malicious (MalwareBazaar) + 4,976 benign (system files), ground-truth labeled.
 
 ## Features
 
@@ -56,7 +43,7 @@ HashGuard is a professional malware research platform that combines static analy
 | **Signatures** | Known-bad | 21 malware hash signatures in `signatures.json` |
 | **Risk Score** | Composite | 0–100 score → clean / suspicious / malicious verdict |
 | **PE Analysis** | Deep inspection | Sections, imports, entropy, packer detection, TLS callbacks, anti-debug/anti-VM, rich headers, overlay analysis |
-| **YARA** | Rule engine | **158 rules** across 14 categories, auto-loads custom `.yar` files |
+| **YARA** | Rule engine | **167 rules** across 15 categories, auto-loads custom `.yar` files |
 | **Capabilities** | CAPA-inspired | Ransomware, keylogger, reverse shell, credential theft, persistence, evasion technique detection |
 | **ML** | Classification | Built-in 5-class ensemble (GBT + RF) + custom trained models (RF, GBT, Ensemble) |
 | **ML Training** | Pipeline | 63-feature extraction, dataset management, model training, real-time prediction |
@@ -96,7 +83,7 @@ HashGuard is a professional malware research platform that combines static analy
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                           HashGuard v1.1.2                           │
+│                           HashGuard v1.1.3                           │
 ├───────────────┬──────────────┬───────────┬───────────────────────────┤
 │     CLI       │ Web Dashboard│  REST API │       Python API          │
 │   cli.py      │ web/api.py   │  /api/*   │ from hashguard import ...│
@@ -196,7 +183,7 @@ start_ingest(source="recent", limit=100)
 
 ## YARA Rules
 
-HashGuard ships with **158 rules** across **14 categories**. Custom `.yar` / `.yara` files placed in the `yara_rules/` directory are loaded automatically.
+HashGuard ships with **167 rules** across **15 categories**. Custom `.yar` / `.yara` files placed in the `yara_rules/` directory are loaded automatically.
 
 | File | Rules | Covers |
 |------|:-----:|--------|
@@ -239,7 +226,7 @@ Settings can also be configured via the **Web Dashboard**, persisted to `%APPDAT
 | Behavioral sandbox | **Yes** | No | No |
 | IOC extraction + graphing | **Yes** | No | No |
 | PE analysis (deep) | **Yes** | Partial | No |
-| YARA rules (158) | **Yes** | No | Yes |
+| YARA rules (167) | **Yes** | No | Yes |
 | STIX 2.1 export | **Yes** | No | No |
 | Malware clustering | **Yes** | No | No |
 | Family detection | **Yes** | **Yes** | Yes |
@@ -270,7 +257,7 @@ src/hashguard/
   string_extractor.py    automated IOC / string extraction
   pe_analyzer.py         PE executable inspection
   advanced_pe.py         extended PE analysis (TLS, anti-debug, rich headers)
-  yara_scanner.py        YARA rules engine (158 rules, 14 categories)
+  yara_scanner.py        YARA rules engine (167 rules, 15 categories)
   threat_intel.py        7-source threat intelligence with TTL cache
   ioc_enrichment.py      passive DNS, geolocation, WHOIS, domain age
   ioc_graph.py           IOC relationship graphs (vis.js)
@@ -295,12 +282,15 @@ src/hashguard/
   web/
     api.py               FastAPI web dashboard + REST API
     templates/            Alpine.js + Tailwind CSS SPA
-  yara_rules/            14 YARA rule files (158 rules)
+  yara_rules/            15 YARA rule files (167 rules)
   data/                  signatures.json, pe_indicators.json
-tests/                   721 pytest tests (78% coverage)
+tests/                   1,212 pytest tests (93% coverage)
 assets/branding/         logo and icon files
 scripts/                 PyInstaller specs, NSIS installer, build tooling
 .github/workflows/       CI (test + lint), Release (build + publish), Security (audit + CodeQL)
+```
+
+Dataset, trained models, and database files are stored locally at `%APPDATA%/HashGuard/` and are **never committed to the repository**.
 ```
 
 ## License

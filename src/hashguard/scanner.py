@@ -359,6 +359,8 @@ def _run_extended_analysis(
     is_malicious: bool,
     description: str,
     config: HashGuardConfig,
+    *,
+    batch_mode: bool = False,
 ) -> tuple:
     """Run PE analysis, YARA scan, threat intel, string extraction, and risk scoring.
 
@@ -403,18 +405,19 @@ def _run_extended_analysis(
         logger.debug(f"YARA scan skipped: {e}")
 
     threat_intel_info = None
-    try:
-        from hashguard.threat_intel import query_all
+    if not batch_mode:
+        try:
+            from hashguard.threat_intel import query_all
 
-        sha256 = hashes.get("sha256", "")
-        if sha256:
-            ti_result = query_all(sha256)
-            threat_intel_info = ti_result.to_dict()
-            if ti_result.flagged_count > 0:
-                flagged = [h.source for h in ti_result.hits if h.found]
-                findings.append(f"Flagged by: {', '.join(flagged)}")
-    except Exception as e:
-        logger.debug(f"Threat intel query skipped: {e}")
+            sha256 = hashes.get("sha256", "")
+            if sha256:
+                ti_result = query_all(sha256)
+                threat_intel_info = ti_result.to_dict()
+                if ti_result.flagged_count > 0:
+                    flagged = [h.source for h in ti_result.hits if h.found]
+                    findings.append(f"Flagged by: {', '.join(flagged)}")
+        except Exception as e:
+            logger.debug(f"Threat intel query skipped: {e}")
 
     # String extraction
     strings_info = None
@@ -476,16 +479,17 @@ def _run_extended_analysis(
     except Exception as e:
         logger.debug(f"Advanced PE skipped: {e}")
 
-    # Fuzzy hashing
+    # Fuzzy hashing — skip in batch mode (DB lookups grow expensive)
     fuzzy_info = None
-    try:
-        from hashguard.fuzzy_hasher import find_similar
+    if not batch_mode:
+        try:
+            from hashguard.fuzzy_hasher import find_similar
 
-        sha256 = hashes.get("sha256", "")
-        fuzzy = find_similar(file_path, sha256=sha256)
-        fuzzy_info = fuzzy.to_dict()
-    except Exception as e:
-        logger.debug(f"Fuzzy hashing skipped: {e}")
+            sha256 = hashes.get("sha256", "")
+            fuzzy = find_similar(file_path, sha256=sha256)
+            fuzzy_info = fuzzy.to_dict()
+        except Exception as e:
+            logger.debug(f"Fuzzy hashing skipped: {e}")
 
     # ML classification
     ml_info = None
@@ -631,6 +635,8 @@ def analyze(
     path: str,
     vt: bool = False,
     config: Optional[HashGuardConfig] = None,
+    *,
+    batch_mode: bool = False,
 ) -> FileAnalysisResult:
     """
     Perform comprehensive file analysis.
@@ -639,6 +645,8 @@ def analyze(
         path: Path to file to analyze
         vt: Whether to query VirusTotal
         config: Configuration object
+        batch_mode: If True, skip expensive network queries (threat intel)
+            and post-processing (IOC graph, timeline) for faster batch ingest.
 
     Returns:
         FileAnalysisResult with detailed analysis
@@ -683,44 +691,46 @@ def analyze(
             packer_info,
             shellcode_info,
             deobfuscation_info,
-        ) = _run_extended_analysis(path, hashes, is_malicious, description, config)
+        ) = _run_extended_analysis(path, hashes, is_malicious, description, config, batch_mode=batch_mode)
 
-        # IOC graph (needs full result context)
+        # IOC graph (needs full result context) — skip in batch mode
         ioc_graph_info = None
-        try:
-            from hashguard.ioc_graph import build_graph
+        if not batch_mode:
+            try:
+                from hashguard.ioc_graph import build_graph
 
-            partial = {
-                "strings_info": strings_info,
-                "threat_intel": threat_intel_info,
-                "pe_info": pe_info,
-                "family_detection": family_info,
-            }
-            graph = build_graph(partial)
-            if graph.nodes:
-                ioc_graph_info = graph.to_visjs()
-        except Exception:
-            pass
+                partial = {
+                    "strings_info": strings_info,
+                    "threat_intel": threat_intel_info,
+                    "pe_info": pe_info,
+                    "family_detection": family_info,
+                }
+                graph = build_graph(partial)
+                if graph.nodes:
+                    ioc_graph_info = graph.to_visjs()
+            except Exception:
+                pass
 
-        # Timeline
+        # Timeline — skip in batch mode
         timeline_info = None
-        try:
-            from hashguard.malware_timeline import build_timeline
+        if not batch_mode:
+            try:
+                from hashguard.malware_timeline import build_timeline
 
-            partial = {
-                "capabilities": capabilities_info,
-                "pe_info": pe_info,
-                "yara_matches": yara_info,
-                "threat_intel": threat_intel_info,
-                "packer": packer_info,
-                "shellcode": shellcode_info,
-                "family_detection": family_info,
-            }
-            tl = build_timeline(partial)
-            if tl.events:
-                timeline_info = tl.to_dict()
-        except Exception:
-            pass
+                partial = {
+                    "capabilities": capabilities_info,
+                    "pe_info": pe_info,
+                    "yara_matches": yara_info,
+                    "threat_intel": threat_intel_info,
+                    "packer": packer_info,
+                    "shellcode": shellcode_info,
+                    "family_detection": family_info,
+                }
+                tl = build_timeline(partial)
+                if tl.events:
+                    timeline_info = tl.to_dict()
+            except Exception:
+                pass
 
         # Optional VirusTotal query
         vt_result = None

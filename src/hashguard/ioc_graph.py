@@ -131,7 +131,10 @@ def build_graph(result_dict: dict) -> IOCGraph:
 
     # IOCs from string extraction
     strings_info = result_dict.get("strings_info") or result_dict.get("strings", {})
+    # Support both nested (iocs.urls) and flat (urls) layouts
     iocs = strings_info.get("iocs", {}) if strings_info else {}
+    if not iocs and strings_info:
+        iocs = strings_info
 
     for url in iocs.get("urls", [])[:15]:
         node_id = f"url_{hash(url) & 0xFFFFFF:06x}"
@@ -140,7 +143,7 @@ def build_graph(result_dict: dict) -> IOCGraph:
             seen_nodes.add(node_id)
         graph.edges.append(GraphEdge(source=file_id, target=node_id, relationship="contacts"))
 
-    for ip in iocs.get("ip_addresses", [])[:15]:
+    for ip in (iocs.get("ips", []) or iocs.get("ip_addresses", []))[:15]:
         node_id = f"ip_{ip.replace('.', '_')}"
         if node_id not in seen_nodes:
             graph.nodes.append(GraphNode(id=node_id, label=ip, node_type="ip"))

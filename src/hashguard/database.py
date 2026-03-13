@@ -108,7 +108,11 @@ _DATASET_SCHEMA_APPLIED = False
 
 
 def _ensure_dataset_table() -> None:
-    """Create the dataset_features table if it doesn't exist."""
+    """Create the dataset_features table if it doesn't exist.
+
+    Also handles schema migration: if the table was created with an older
+    version of FEATURE_COLUMNS, any new columns are added via ALTER TABLE.
+    """
     global _DATASET_SCHEMA_APPLIED
     if _DATASET_SCHEMA_APPLIED:
         return
@@ -121,7 +125,25 @@ def _ensure_dataset_table() -> None:
         cols.append(f"{col_name} {col_type}")
     ddl = f"CREATE TABLE IF NOT EXISTS dataset_features (\n    {', '.join(cols)}\n);"
     conn = get_connection()
-    conn.executescript(ddl + "\nCREATE INDEX IF NOT EXISTS idx_dataset_sha256 ON dataset_features(sha256);\nCREATE INDEX IF NOT EXISTS idx_dataset_verdict ON dataset_features(label_verdict);")
+    conn.executescript(ddl)
+
+    # Migrate: add any columns missing from older schema versions
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(dataset_features)").fetchall()}
+    for col_name, col_type in FEATURE_COLUMNS.items():
+        if col_name not in existing:
+            try:
+                conn.execute(f"ALTER TABLE dataset_features ADD COLUMN {col_name} {col_type}")
+            except Exception:
+                pass  # column already exists or other benign error
+
+    # Indexes for ML queries
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_dataset_sha256 ON dataset_features(sha256);
+        CREATE INDEX IF NOT EXISTS idx_dataset_verdict ON dataset_features(label_verdict);
+        CREATE INDEX IF NOT EXISTS idx_dataset_family ON dataset_features(label_family);
+        CREATE INDEX IF NOT EXISTS idx_dataset_source ON dataset_features(label_source);
+        CREATE INDEX IF NOT EXISTS idx_dataset_malicious ON dataset_features(label_is_malicious);
+    """)
     conn.commit()
     _DATASET_SCHEMA_APPLIED = True
 

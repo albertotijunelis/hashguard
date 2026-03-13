@@ -11,6 +11,8 @@ Supports:
   - Model persistence via joblib
 """
 
+import hashlib
+import hmac as _hmac
 import json
 import os
 import threading
@@ -58,6 +60,30 @@ except ImportError:
 MODEL_DIR = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")), "HashGuard", "models"
 )
+
+_HMAC_KEY = b"HashGuard-ML-Integrity-v4"
+
+
+def _compute_file_hmac(path: str) -> str:
+    """Compute HMAC-SHA256 of a file for integrity verification."""
+    h = _hmac.new(_HMAC_KEY, digestmod=hashlib.sha256)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify_model_hmac(model_path: str) -> bool:
+    """Verify HMAC of a model file. Returns True if valid or no HMAC exists yet."""
+    hmac_path = model_path + ".hmac"
+    if not os.path.isfile(hmac_path):
+        return True  # Legacy model without HMAC — allow but log
+    try:
+        stored = Path(hmac_path).read_text().strip()
+        computed = _compute_file_hmac(model_path)
+        return _hmac.compare_digest(stored, computed)
+    except Exception:
+        return False
 
 # Numeric feature columns from feature_extractor.FEATURE_COLUMNS
 # (excludes label_* text columns)
@@ -194,7 +220,7 @@ def _load_dataset_from_db() -> Tuple[Optional[Any], Optional[Any], Optional[List
     _ensure_dataset_table()
     conn = get_connection()
 
-    cols_sql = ", ".join(NUMERIC_FEATURES + ["label_is_malicious", "label_family"])
+    cols_sql = ", ".join(NUMERIC_FEATURES + ["label_is_malicious", "label_family", "label_source"])
     rows = conn.execute(
         f"SELECT {cols_sql} FROM dataset_features"
     ).fetchall()
@@ -205,11 +231,22 @@ def _load_dataset_from_db() -> Tuple[Optional[Any], Optional[Any], Optional[List
     X = []
     y_binary = []
     families = []
+    skipped = 0
     for row in rows:
         feats = [float(row[col] or 0) for col in NUMERIC_FEATURES]
+        # Data validation: skip rows with NaN/inf
+        if any(not np.isfinite(v) for v in feats):
+            skipped += 1
+            continue
         X.append(feats)
         y_binary.append(int(row["label_is_malicious"]))
         families.append(str(row["label_family"] or "unknown"))
+
+    if skipped:
+        logger.info(f"Skipped {skipped} rows with NaN/inf values")
+
+    if not X:
+        return None, None, None, []
 
     return np.array(X), np.array(y_binary), families, NUMERIC_FEATURES
 
@@ -467,6 +504,11 @@ def _train_model(
             X, y, test_size=test_size, random_state=42, stratify=y
         )
     else:
+        # Not enough data for proper split — log a warning
+        logger.warning(
+            f"Small dataset ({len(X)} samples, min class={min_class_count}) "
+            f"— metrics will be optimistic (no held-out test set)"
+        )
         X_train, X_test, y_train, y_test = X, X, y, y
 
     # Scale features
@@ -525,6 +567,9 @@ def _train_model(
         import pickle
         with open(model_path, "wb") as f:
             pickle.dump(model_data, f)
+
+    # Write HMAC for integrity verification
+    Path(model_path + ".hmac").write_text(_compute_file_hmac(model_path))
 
     # Save metadata JSON alongside
     meta_path = os.path.join(MODEL_DIR, f"{model_id}.json")
@@ -666,6 +711,10 @@ def predict_sample(features: Dict[str, float], model_id: Optional[str] = None) -
 
     if not os.path.isfile(model_path):
         return {"error": f"Model file not found: {model_id}"}
+
+    if not _verify_model_hmac(model_path):
+        logger.warning(f"Model integrity check FAILED for {model_path}")
+        return {"error": "Model integrity check failed"}
 
     try:
         if HAS_JOBLIB:

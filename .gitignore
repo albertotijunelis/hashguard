@@ -46,6 +46,16 @@ scripts/SHA256SUMS.txt
 .DS_Store
 Thumbs.db
 
+# Dataset & models
+*.db
+!Thumbs.db
+*.sqlite
+*.sqlite3
+*.joblib
+*.pkl
+*.hmac
+models/
+
 # Secrets
 .env
 .env.local

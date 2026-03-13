@@ -1056,3 +1056,125 @@ def classify(file_path: str, pe_info: dict = None, adv_pe: dict = None) -> MLCla
         logger.debug(f"ML classification error: {e}")
 
     return result
+
+
+# ── Trained-model inference (uses ml_trainer's full-feature model) ────────
+
+
+def classify_with_trained_model(
+    file_path: str,
+    result_dict: dict,
+) -> MLClassification:
+    """Classify using the model trained by ``ml_trainer`` on the full feature set.
+
+    This provides a richer classification than ``classify()`` because it
+    uses ~61 features extracted from the *complete* analysis pipeline
+    (PE, strings, YARA, capabilities, risk) rather than just 22 PE-level
+    features.
+
+    Falls back to ``classify()`` if no trained model is available.
+
+    Parameters
+    ----------
+    file_path:
+        Path to the analysed file.
+    result_dict:
+        The full ``FileAnalysisResult.to_dict()`` from the scanner pipeline.
+    """
+    result = MLClassification()
+    if not HAS_ML:
+        return result
+
+    try:
+        from hashguard.ml_trainer import MODEL_DIR as TRAINER_MODEL_DIR, NUMERIC_FEATURES
+        from hashguard.feature_extractor import extract_features as extract_full_features
+
+        # Find the most recent trained model
+        model_data = _load_trained_model(TRAINER_MODEL_DIR)
+        if model_data is None:
+            # No trained model — fall back to PE-level classification
+            pe_info = result_dict.get("pe_info")
+            return classify(file_path, pe_info=pe_info)
+
+        clf = model_data["clf"]
+        scaler = model_data["scaler"]
+        class_names = model_data["class_names"]
+        feature_names = model_data.get("feature_names", NUMERIC_FEATURES)
+
+        # Extract features from the full analysis result
+        feats = extract_full_features(file_path, result_dict)
+
+        # Build feature vector in the same order as training
+        X_row = [float(feats.get(fname, 0) or 0) for fname in feature_names]
+        X = np.array([X_row])
+        X_scaled = scaler.transform(X)
+
+        # Predict
+        proba = clf.predict_proba(X_scaled)[0]
+        pred_idx = int(np.argmax(proba))
+        result.predicted_class = class_names[pred_idx]
+        result.confidence = float(proba[pred_idx])
+        result.probabilities = {
+            class_names[i]: float(p) for i, p in enumerate(proba)
+        }
+        result.features_used = len(feature_names)
+
+    except Exception as e:
+        logger.debug(f"Trained-model classification error: {e}")
+        # Fallback to PE-level
+        pe_info = result_dict.get("pe_info")
+        return classify(file_path, pe_info=pe_info)
+
+    return result
+
+
+def _load_trained_model(model_dir: str) -> Optional[dict]:
+    """Load the most recent model saved by ml_trainer.
+
+    Returns the model data dict or None if no model exists.
+    """
+    if not os.path.isdir(model_dir):
+        return None
+
+    try:
+        import joblib as _joblib
+    except ImportError:
+        _joblib = None
+
+    # Find most recent .joblib (or .pkl) model file
+    model_files = sorted(Path(model_dir).glob("*.joblib"), reverse=True)
+    if not model_files and _joblib is None:
+        model_files = sorted(Path(model_dir).glob("*.pkl"), reverse=True)
+
+    if not model_files:
+        return None
+
+    model_path = str(model_files[0])
+
+    # Verify HMAC integrity if available
+    hmac_path = model_path + ".hmac"
+    if os.path.isfile(hmac_path):
+        try:
+            stored = Path(hmac_path).read_text().strip()
+            computed = _compute_file_hmac(model_path)
+            if not hmac.compare_digest(stored, computed):
+                logger.warning(f"Trained model integrity check FAILED: {model_path}")
+                return None
+        except Exception:
+            logger.warning("Failed to verify trained model HMAC")
+            return None
+
+    try:
+        if _joblib is not None:
+            data = _joblib.load(model_path)
+        else:
+            with open(model_files[0], "rb") as f:
+                data = pickle.load(f)
+
+        # Validate required keys
+        if "clf" in data and "scaler" in data and "class_names" in data:
+            return data
+    except Exception as e:
+        logger.debug(f"Failed to load trained model {model_files[0]}: {e}")
+
+    return None

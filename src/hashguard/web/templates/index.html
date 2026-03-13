@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HashGuard v1.1.2 — Malware Research Platform</title>
+<title>HashGuard v1.1.3 — Malware Research Platform</title>
 <link rel="icon" type="image/png" href="/static/logo-icon.png">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
@@ -50,7 +50,7 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
 <div class="fixed left-0 top-0 h-full w-64 bg-hg-surface border-r border-hg-border flex flex-col z-50">
   <div class="p-5 border-b border-hg-border">
     <div class="flex items-center">
-      <img src="/static/logo-full.png" alt="HashGuard v1.1.2 Research Platform" class="h-10 object-contain">
+      <img src="/static/logo-full.png" alt="HashGuard v1.1.3 Research Platform" class="h-10 object-contain">
     </div>
   </div>
   <nav class="flex-1 p-3 space-y-1">
@@ -465,7 +465,7 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
 
           <!-- IOCs Tab -->
           <div x-show="resultTab==='iocs'" class="space-y-4">
-            <!-- String Stats -->
+            <!-- IOC Summary Cards -->
             <div x-show="lastResult?.strings_info" class="grid grid-cols-4 gap-4 mb-4">
               <div class="bg-hg-bg rounded-lg p-3 text-center">
                 <div class="text-2xl font-bold text-hg-accent" x-text="lastResult?.strings_info?.urls?.length||0"></div>
@@ -476,24 +476,39 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
                 <div class="text-xs text-hg-muted">IPs</div>
               </div>
               <div class="bg-hg-bg rounded-lg p-3 text-center">
-                <div class="text-2xl font-bold text-hg-cyan" x-text="(lastResult?.strings_info?.domains?.length||lastResult?.strings_info?.iocs?.domains?.length||0)"></div>
+                <div class="text-2xl font-bold text-hg-cyan" x-text="lastResult?.strings_info?.domains?.length||0"></div>
                 <div class="text-xs text-hg-muted">Domains</div>
               </div>
               <div class="bg-hg-bg rounded-lg p-3 text-center">
-                <div class="text-2xl font-bold text-hg-danger" x-text="(lastResult?.strings_info?.crypto_wallets?.length||lastResult?.strings_info?.iocs?.crypto_wallets?.length||0)"></div>
+                <div class="text-2xl font-bold text-hg-danger" x-text="lastResult?.strings_info?.crypto_wallets?.length||0"></div>
                 <div class="text-xs text-hg-muted">Wallets</div>
               </div>
             </div>
-            <template x-for="[type, items] in Object.entries(lastResult?.strings_info?.iocs||lastResult?.strings?.iocs||{})" :key="type">
-              <div x-show="items?.length" class="bg-hg-bg rounded-lg p-4">
-                <div class="font-medium mb-2 capitalize" x-text="type.replace(/_/g,' ')"></div>
-                <div class="flex flex-wrap gap-1">
-                  <template x-for="item in items?.slice(0,20)||[]">
-                    <span class="bg-hg-card px-2 py-1 rounded text-xs font-mono" x-text="item"></span>
+
+            <!-- IOC Detail Lists -->
+            <template x-for="[type, color] in [['urls','text-hg-accent'],['ips','text-hg-purple'],['domains','text-hg-cyan'],['emails','text-yellow-400'],['crypto_wallets','text-hg-danger'],['powershell_commands','text-red-400'],['suspicious_paths','text-orange-400'],['user_agents','text-blue-400'],['registry_keys','text-gray-400']]" :key="type">
+              <div x-show="lastResult?.strings_info?.[type]?.length" class="bg-hg-bg rounded-lg p-4">
+                <div class="flex items-center justify-between mb-3">
+                  <div class="font-medium capitalize" :class="color" x-text="type.replace(/_/g,' ')"></div>
+                  <span class="text-xs text-hg-muted bg-hg-card px-2 py-0.5 rounded-full" x-text="lastResult?.strings_info?.[type]?.length"></span>
+                </div>
+                <div class="space-y-1 max-h-48 overflow-y-auto">
+                  <template x-for="(item, idx) in lastResult?.strings_info?.[type]||[]" :key="idx">
+                    <div class="flex items-center gap-2 group">
+                      <span class="font-mono text-sm bg-hg-card px-2 py-1 rounded break-all flex-1" x-text="item"></span>
+                      <button @click="navigator.clipboard.writeText(item)" class="opacity-0 group-hover:opacity-100 text-hg-muted hover:text-hg-accent transition-opacity text-xs px-1" title="Copy">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                      </button>
+                    </div>
                   </template>
                 </div>
               </div>
             </template>
+
+            <!-- No IOCs found -->
+            <div x-show="!lastResult?.strings_info?.has_iocs" class="text-center text-hg-muted py-8">
+              No IOCs extracted from this sample.
+            </div>
           </div>
 
           <!-- Graph Tab -->
@@ -1242,13 +1257,15 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
               <option value="tag">By Tag</option>
               <option value="filetype">By File Type</option>
               <option value="mixed">Mixed (Multi-type)</option>
+              <option value="continuous">Continuous (200k+)</option>
+              <option value="benign">Benign (System Files)</option>
               <option value="local">Local Directory</option>
             </select>
           </div>
           <div>
             <label class="text-xs text-hg-muted">Limit</label>
-            <input type="number" x-model.number="ingestLimit" min="1" :max="ingestSource==='recent'?100:ingestSource==='tag'||ingestSource==='filetype'?1000:10000" class="w-full bg-hg-bg border border-hg-border rounded-lg px-3 py-1.5 text-sm mt-1 focus:outline-none focus:border-hg-accent">
-            <div class="text-xs text-hg-muted mt-0.5" x-text="ingestSource==='recent'?'Max 100':ingestSource==='tag'||ingestSource==='filetype'?'Max 1,000':'Max 10,000'"></div>
+            <input type="number" x-model.number="ingestLimit" min="1" :max="ingestSource==='recent'?100:ingestSource==='tag'||ingestSource==='filetype'?1000:ingestSource==='continuous'?500000:ingestSource==='benign'?10000:10000" class="w-full bg-hg-bg border border-hg-border rounded-lg px-3 py-1.5 text-sm mt-1 focus:outline-none focus:border-hg-accent">
+            <div class="text-xs text-hg-muted mt-0.5" x-text="ingestSource==='recent'?'Max 100':ingestSource==='tag'||ingestSource==='filetype'?'Max 1,000':ingestSource==='continuous'?'Target samples':ingestSource==='benign'?'System binaries':'Max 10,000'"></div>
           </div>
           <div x-show="ingestSource==='tag'">
             <label class="text-xs text-hg-muted">Tag</label>
@@ -1276,7 +1293,11 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
           <div class="bg-hg-bg rounded-lg p-4 space-y-2">
             <div class="flex items-center justify-between text-sm">
               <span class="font-mono" :class="ingestStatus.status==='running'?'text-hg-accent':ingestStatus.status==='done'?'text-hg-success':'text-hg-warn'" x-text="ingestStatus.status.toUpperCase()"></span>
-              <span class="text-hg-muted" x-text="ingestStatus.elapsed_seconds ? Math.round(ingestStatus.elapsed_seconds)+'s' : ''"></span>
+              <div class="flex gap-3 text-hg-muted">
+                <span x-show="ingestStatus.rate_per_minute" x-text="ingestStatus.rate_per_minute+' samples/min'"></span>
+                <span x-show="ingestStatus.eta_minutes" x-text="'ETA: '+(ingestStatus.eta_minutes>=60?Math.floor(ingestStatus.eta_minutes/60)+'h '+ingestStatus.eta_minutes%60+'m':ingestStatus.eta_minutes+'m')"></span>
+                <span x-text="ingestStatus.elapsed_seconds ? (ingestStatus.elapsed_seconds>=3600?Math.floor(ingestStatus.elapsed_seconds/3600)+'h '+Math.floor(ingestStatus.elapsed_seconds%3600/60)+'m':ingestStatus.elapsed_seconds>=60?Math.floor(ingestStatus.elapsed_seconds/60)+'m '+Math.round(ingestStatus.elapsed_seconds%60)+'s':Math.round(ingestStatus.elapsed_seconds)+'s') : ''"></span>
+              </div>
             </div>
             <div x-show="ingestStatus.status==='running' && !ingestStatus.total_candidates" class="flex items-center gap-2 text-sm text-hg-accent">
               <div class="w-4 h-4 border-2 border-hg-accent border-t-transparent rounded-full animate-spin"></div>
@@ -1410,7 +1431,7 @@ body { background: #0a0e17; color: #f8fafc; font-family: 'Inter', sans-serif; }
       </div>
       <div class="bg-hg-card rounded-xl p-6 border border-hg-border">
         <h3 class="font-semibold mb-4">About</h3>
-        <p class="text-sm text-hg-muted">HashGuard v1.1.2 &mdash; Malware Research Platform</p>
+        <p class="text-sm text-hg-muted">HashGuard v1.1.3 &mdash; Malware Research Platform</p>
         <p class="text-sm text-hg-muted mt-1">Architecture: CLI + REST API + Web Dashboard</p>
         <p class="text-sm text-hg-muted mt-1">Engine: Static + ML + Behavioral + YARA (167 rules) + Script Deobfuscation + Unicorn Emulation + 7 Threat Intel feeds</p>
         <p class="text-sm text-hg-muted mt-1">Author: Alberto Tijunelis Neto</p>

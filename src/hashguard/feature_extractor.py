@@ -15,6 +15,7 @@ Features are grouped into categories:
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from typing import Any, Dict, List, Optional
@@ -102,6 +103,7 @@ def _histogram_stats(hist: List[int]) -> Dict[str, float]:
 def extract_features(
     file_path: str,
     result_dict: dict,
+    mb_metadata: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Extract numerical features from a file + its analysis result.
 
@@ -111,6 +113,10 @@ def extract_features(
         Path to the analysed file on disk.
     result_dict:
         The full analysis result dict (``FileAnalysisResult.to_dict()``).
+    mb_metadata:
+        Optional MalwareBazaar sample metadata dict.  When provided,
+        ground-truth labels (family, tags) are taken from the feed
+        instead of the scanner's own verdict.
 
     Returns
     -------
@@ -216,15 +222,36 @@ def extract_features(
         features["yara_unique_categories"] = 0
 
     # ── 5. Threat Intel features ────────────────────────────────────────────
+    #
+    # In batch_mode the scanner skips HTTP threat-intel queries, so
+    # result_dict["threat_intel"] is None.  When MalwareBazaar metadata
+    # is available we derive the TI features from it — MalwareBazaar IS
+    # a threat-intel source and the sample IS flagged there.
 
     ti = result_dict.get("threat_intel") or {}
-    features["ti_total_sources"] = ti.get("total_sources", 0)
-    features["ti_flagged_count"] = ti.get("flagged_count", 0)
-    features["ti_successful_sources"] = ti.get("successful_sources", 0)
-
-    hits = ti.get("hits", [])
-    features["ti_total_tags"] = sum(len(h.get("tags", [])) for h in hits)
-    features["ti_has_family"] = 1 if any(h.get("malware_family") for h in hits) else 0
+    if ti:
+        # Full pipeline ran — use real TI data
+        features["ti_total_sources"] = ti.get("total_sources", 0)
+        features["ti_flagged_count"] = ti.get("flagged_count", 0)
+        features["ti_successful_sources"] = ti.get("successful_sources", 0)
+        hits = ti.get("hits", [])
+        features["ti_total_tags"] = sum(len(h.get("tags", [])) for h in hits)
+        features["ti_has_family"] = 1 if any(h.get("malware_family") for h in hits) else 0
+    elif mb_metadata:
+        # Batch mode — derive from MalwareBazaar metadata (no extra HTTP)
+        mb_tags = mb_metadata.get("tags") or []
+        mb_sig = mb_metadata.get("signature") or ""
+        features["ti_total_sources"] = 1       # MalwareBazaar
+        features["ti_flagged_count"] = 1       # present in malware feed
+        features["ti_successful_sources"] = 1
+        features["ti_total_tags"] = len(mb_tags)
+        features["ti_has_family"] = 1 if mb_sig else 0
+    else:
+        features["ti_total_sources"] = 0
+        features["ti_flagged_count"] = 0
+        features["ti_successful_sources"] = 0
+        features["ti_total_tags"] = 0
+        features["ti_has_family"] = 0
 
     # ── 6. Capability features ──────────────────────────────────────────────
 
@@ -273,13 +300,29 @@ def extract_features(
         features["risk_total_points"] = 0
 
     # ── 9. Label fields (not features, but needed for training) ─────────────
+    #
+    # When MalwareBazaar metadata is available we use analyst-verified
+    # labels (ground truth).  Otherwise we fall back to the scanner's
+    # own verdict — but mark the source so the trainer can filter.
 
-    features["label_verdict"] = risk.get("verdict", "unknown")
-    features["label_is_malicious"] = 1 if result_dict.get("malicious") else 0
-
-    family = result_dict.get("family_detection") or {}
-    features["label_family"] = family.get("family", "")
-    features["label_family_confidence"] = family.get("confidence", 0.0)
+    if mb_metadata:
+        features["label_source"] = "malwarebazaar"
+        features["label_is_malicious"] = 1  # everything from MB is malicious
+        features["label_verdict"] = "malicious"
+        features["label_family"] = mb_metadata.get("signature") or ""
+        features["label_family_confidence"] = 1.0  # analyst-verified
+        tags = mb_metadata.get("tags") or []
+        features["label_mb_tags"] = json.dumps(tags) if tags else "[]"
+        features["label_mb_signature"] = mb_metadata.get("signature") or ""
+    else:
+        features["label_source"] = "scanner"
+        features["label_verdict"] = risk.get("verdict", "unknown")
+        features["label_is_malicious"] = 1 if result_dict.get("malicious") else 0
+        family = result_dict.get("family_detection") or {}
+        features["label_family"] = family.get("family", "")
+        features["label_family_confidence"] = family.get("confidence", 0.0)
+        features["label_mb_tags"] = "[]"
+        features["label_mb_signature"] = ""
 
     return features
 
@@ -365,4 +408,8 @@ FEATURE_COLUMNS: Dict[str, str] = {
     "label_is_malicious": "INTEGER",
     "label_family": "TEXT",
     "label_family_confidence": "REAL",
+    # Ground truth source metadata
+    "label_source": "TEXT",
+    "label_mb_tags": "TEXT",
+    "label_mb_signature": "TEXT",
 }

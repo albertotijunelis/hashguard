@@ -13,7 +13,7 @@
 
 ; Product Details
 !ifndef VERSION
-  !define VERSION "1.1.2"
+  !define VERSION "1.1.3"
 !endif
 !ifndef DISTDIR
   !define DISTDIR "dist\HashGuard"
