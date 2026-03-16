@@ -299,16 +299,12 @@ class TestAdminRouter:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from hashguard.web.routers import admin_router as ar_mod
-        # Patch _check_admin to be a no-op
-        orig = getattr(ar_mod, "_check_admin", None)
+        # Patch _check_admin to be a no-op (keep patch active for requests)
         ar_mod._check_admin = lambda request: None
         app = FastAPI()
         app.include_router(ar_mod.router)
         app.dependency_overrides[get_db] = _db_gen
         client = TestClient(app)
-        # Restore if needed
-        if orig is not None:
-            ar_mod._check_admin = orig
         return client
 
     @pytest.mark.xfail(reason="admin_router uses ORM models internally; Subscription ORM lacks 'plan' column")

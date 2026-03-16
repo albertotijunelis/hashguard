@@ -887,22 +887,45 @@ def analyze_url(
     max_redirects = 10
     current_url = url
     resp = None
+    import socket as _socket
     for _ in range(max_redirects):
         # Re-validate hostname before each request to guard against DNS rebinding
         hop_parsed = urlparse(current_url)
-        if hop_parsed.hostname and _is_private_ip(hop_parsed.hostname):
+        if hop_parsed.scheme not in ("http", "https"):
+            raise ValueError("Only HTTP(S) URLs are supported")
+        hop_host = hop_parsed.hostname
+        if not hop_host:
+            raise ValueError("No hostname in URL")
+        if _is_private_ip(hop_host):
             raise ValueError("Request target resolves to a private address")
         # Pre-resolve DNS and validate all resolved IPs before connecting
-        import socket
+        hop_port = hop_parsed.port or (443 if hop_parsed.scheme == "https" else 80)
         try:
-            resolved = socket.getaddrinfo(hop_parsed.hostname, hop_parsed.port or (443 if hop_parsed.scheme == "https" else 80))
-            for _fam, _typ, _proto, _canon, sockaddr in resolved:
-                resolved_ip = ipaddress.ip_address(sockaddr[0])
-                if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local or resolved_ip.is_reserved:
-                    raise ValueError("DNS resolves to a private/reserved address")
-        except socket.gaierror:
+            resolved = _socket.getaddrinfo(hop_host, hop_port)
+        except _socket.gaierror:
             raise ValueError("Could not resolve hostname")
-        resp = req.get(current_url, timeout=30, stream=True, allow_redirects=False, verify=True)
+        first_public_ip = None
+        for _fam, _typ, _proto, _canon, sockaddr in resolved:
+            resolved_ip = ipaddress.ip_address(sockaddr[0])
+            if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local or resolved_ip.is_reserved:
+                raise ValueError("DNS resolves to a private/reserved address")
+            if first_public_ip is None:
+                first_public_ip = str(resolved_ip)
+        if not first_public_ip:
+            raise ValueError("Could not resolve hostname to a public address")
+        # Build URL using the resolved IP to prevent DNS rebinding
+        ip_port = f"{first_public_ip}:{hop_port}"
+        safe_path = hop_parsed.path or "/"
+        safe_query = f"?{hop_parsed.query}" if hop_parsed.query else ""
+        resolved_url = f"{hop_parsed.scheme}://{ip_port}{safe_path}{safe_query}"
+        resp = req.get(
+            resolved_url,
+            headers={"Host": hop_host},
+            timeout=30,
+            stream=True,
+            allow_redirects=False,
+            verify=False,
+        )
         # Post-connection check: verify connected IP is not private
         try:
             sock = resp.raw._fp.fp.raw._sock

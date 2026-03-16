@@ -197,8 +197,8 @@ def unpack_upx(file_path: str, output_dir: str = None) -> UnpackResult:
         result.error = "UPX binary not found"
     except subprocess.TimeoutExpired:
         result.error = "Unpacking timed out"
-    except Exception as e:
-        result.error = str(e)
+    except Exception:
+        result.error = "Unpacking failed"
 
     return result
 

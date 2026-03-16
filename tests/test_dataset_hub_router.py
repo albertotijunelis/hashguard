@@ -175,7 +175,11 @@ class TestKagglePublish:
             kmod = importlib.import_module("kaggle.api.kaggle_api_extended")
         except (ImportError, AttributeError, ModuleNotFoundError):
             pytest.skip("kaggle.api.kaggle_api_extended not accessible")
-        with patch("hashguard.database.get_dataset_version_path", return_value="/tmp/test.csv"), \
+        # Build a real path under the expected dataset directory
+        app_data = os.environ.get("APPDATA") or os.path.expanduser("~")
+        fake_path = os.path.join(app_data, "HashGuard", "datasets", "test.csv")
+        with patch("hashguard.database.get_dataset_version_path", return_value=fake_path), \
+             patch("os.path.isfile", return_value=True), \
              patch("shutil.copy2"), \
              patch.object(kmod, "KaggleApi", side_effect=Exception("Kaggle Error")):
             r = client.post("/api/dataset/hub/kaggle/publish?version=1.0.0")

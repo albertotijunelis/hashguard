@@ -255,15 +255,15 @@ def _deliver(hook_id: str, hook: dict, payload: dict) -> dict:
         return {"success": True, "status_code": status, "response": body}
 
     except urllib.error.HTTPError as e:
-        error_msg = f"HTTP {e.code}: {e.reason}"
+        error_msg = f"HTTP {e.code}"
         _record_error(hook_id, error_msg)
         return {"success": False, "error": error_msg}
-    except urllib.error.URLError as e:
-        error_msg = f"Connection error: {e.reason}"
+    except urllib.error.URLError:
+        error_msg = "Connection error"
         _record_error(hook_id, error_msg)
         return {"success": False, "error": error_msg}
-    except Exception as e:
-        error_msg = str(e)
+    except Exception:
+        error_msg = "Delivery failed"
         _record_error(hook_id, error_msg)
         return {"success": False, "error": error_msg}
 

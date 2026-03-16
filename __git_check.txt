@@ -1,0 +1,28 @@
+LOG:
+02bb3e5 v1.1.4: SaaS infrastructure, Docker support, 9 API routers, 95% coverage
+e6452b3 v1.1.3: ML models trained, HMAC security, IOC improvements
+507054b v1.1.2: 97% test coverage, async batch ingest, dashboard improvements
+
+STATUS:
+0 staged/modified remaining
+?? __git_check.txt
+?? __gitlog.txt
+?? alembic.ini
+?? alembic/
+?? docker-compose.monitoring.yml
+?? docker-compose.production.yml
+?? docs/STRIPE_PRODUCTION.md
+?? infra/
+?? nginx/
+?? scripts/_check_ingest.py
+?? scripts/audit_full.py
+?? scripts/backfill_iocs.py
+?? scripts/backup.sh
+?? scripts/check_iocs.py
+?? scripts/db_audit.py
+?? scripts/db_audit_deep.py
+?? scripts/db_check_fullresult.py
+?? scripts/db_check_scores.py
+?? scripts/db_fix_mb_scores.py
+?? scripts/db_fix_mb_scores2.py
+?? scripts/db_repa

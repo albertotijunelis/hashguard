@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HashGuard — Em Breve</title>
+  <meta name="description" content="HashGuard: plataforma de pesquisa de malware com 18 engines de análise, classificação ML, YARA scanning e threat intelligence. Em breve.">
+  <meta property="og:title" content="HashGuard — Malware Research Platform">
+  <meta property="og:description" content="Plataforma open-source de análise de malware com 18 engines, ML, YARA e threat intelligence. Em breve.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://hashguard.org">
+  <link rel="canonical" href="https://hashguard.org">
+  <link rel="icon" type="image/x-icon" href="/static/favicon.ico?v=113">
+  <link rel="icon" type="image/png" sizes="48x48" href="/static/favicon-48.png?v=113">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'hg-bg':     '#0b1121',
+            'hg-bg2':    '#0f172a',
+            'hg-card':   '#111827',
+            'hg-border': '#1e293b',
+            'hg-cyan':   '#22d3ee',
+            'hg-accent': '#f97316',
+            'hg-muted':  '#94a3b8',
+            'hg-green':  '#10b981',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { background: #0b1121; }
+    .gradient-text {
+      background: linear-gradient(135deg, #22d3ee 0%, #06b6d4 40%, #f97316 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .glow { box-shadow: 0 0 80px rgba(34, 211, 238, 0.12), 0 0 40px rgba(34, 211, 238, 0.06); }
+    .hero-grid {
+      background-image: radial-gradient(circle at 1px 1px, rgba(34,211,238,0.06) 1px, transparent 0);
+      background-size: 40px 40px;
+    }
+    .hero-glow {
+      position: absolute; top: -200px; left: 50%; transform: translateX(-50%);
+      width: 800px; height: 600px;
+      background: radial-gradient(ellipse, rgba(34,211,238,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .feature-card { transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
+    .feature-card:hover { transform: translateY(-4px); border-color: #22d3ee; box-shadow: 0 12px 40px rgba(34,211,238,0.08); }
+    .animate-float { animation: float 6s ease-in-out infinite; }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+    .logo-glow { filter: drop-shadow(0 0 20px rgba(34,211,238,0.3)); }
+    .animate-pulse-slow { animation: pulse-slow 3s ease-in-out infinite; }
+    @keyframes pulse-slow { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    html { scroll-behavior: smooth; }
+    @keyframes countdown-bar { 0% { width: 0; } 100% { width: 100%; } }
+    .countdown-bar { animation: countdown-bar 2s ease-out forwards; }
+  </style>
+</head>
+<body class="text-gray-200 antialiased overflow-x-hidden min-h-screen flex flex-col">
+
+  <!-- Navigation -->
+  <nav class="fixed top-0 w-full z-50 bg-hg-bg/90 backdrop-blur-lg border-b border-hg-border/50">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-3">
+        <img src="/static/logo-full.png?v=113" alt="HashGuard" class="h-8">
+      </a>
+      <div class="flex items-center gap-6 text-sm text-hg-muted">
+        <a href="https://github.com/albertotijunelis/hashguard" target="_blank" rel="noopener noreferrer"
+           class="hover:text-white transition flex items-center gap-2">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <main class="flex-1 flex items-center justify-center relative pt-16">
+    <div class="hero-grid absolute inset-0"></div>
+    <div class="hero-glow"></div>
+
+    <div class="relative z-10 max-w-4xl mx-auto px-6 py-20 text-center">
+
+      <!-- Logo -->
+      <div class="flex justify-center mb-10">
+        <div class="animate-float">
+          <img src="/static/logo-icon.png?v=113" alt="HashGuard" class="h-24 w-24 logo-glow">
+        </div>
+      </div>
+
+      <!-- Badge -->
+      <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-hg-cyan/30 bg-hg-cyan/5 text-hg-cyan text-sm font-medium mb-8">
+        <span class="w-2 h-2 rounded-full bg-hg-cyan animate-pulse-slow"></span>
+        Em Desenvolvimento Ativo
+      </div>
+
+      <!-- Headline -->
+      <h1 class="text-5xl md:text-7xl font-extrabold tracking-tight mb-6">
+        <span class="gradient-text">HashGuard</span>
+      </h1>
+      <p class="text-xl md:text-2xl text-hg-muted max-w-2xl mx-auto mb-4">
+        Malware Research Platform
+      </p>
+      <p class="text-lg text-gray-400 max-w-xl mx-auto mb-12">
+        Plataforma open-source de análise de malware com múltiplas engines,
+        classificação por machine learning, YARA scanning e threat intelligence em tempo real.
+      </p>
+
+      <!-- Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-2xl mx-auto mb-14">
+        <div class="bg-hg-card/60 border border-hg-border rounded-xl px-4 py-5">
+          <div class="text-2xl font-bold text-hg-cyan">18</div>
+          <div class="text-xs text-hg-muted mt-1">Analysis Engines</div>
+        </div>
+        <div class="bg-hg-card/60 border border-hg-border rounded-xl px-4 py-5">
+          <div class="text-2xl font-bold text-hg-cyan">190+</div>
+          <div class="text-xs text-hg-muted mt-1">YARA Rules</div>
+        </div>
+        <div class="bg-hg-card/60 border border-hg-border rounded-xl px-4 py-5">
+          <div class="text-2xl font-bold text-hg-cyan">95%</div>
+          <div class="text-xs text-hg-muted mt-1">Test Coverage</div>
+        </div>
+        <div class="bg-hg-card/60 border border-hg-border rounded-xl px-4 py-5">
+          <div class="text-2xl font-bold text-hg-cyan">REST</div>
+          <div class="text-xs text-hg-muted mt-1">API + SDK</div>
+        </div>
+      </div>
+
+      <!-- Email Signup -->
+      <div class="max-w-md mx-auto mb-14">
+        <p class="text-sm text-hg-muted mb-4">Receba uma notificação quando lançarmos:</p>
+        <form id="waitlist-form" class="flex gap-2" onsubmit="return handleWaitlist(event)">
+          <input type="email" id="waitlist-email" required placeholder="seu@email.com"
+            class="flex-1 px-4 py-3 rounded-lg bg-hg-bg2 border border-hg-border text-white placeholder-gray-500
+                   focus:outline-none focus:border-hg-cyan focus:ring-1 focus:ring-hg-cyan/50 text-sm">
+          <button type="submit"
+            class="px-6 py-3 bg-hg-cyan text-hg-bg font-semibold rounded-lg hover:bg-cyan-300 transition text-sm whitespace-nowrap">
+            Notifique-me
+          </button>
+        </form>
+        <p id="waitlist-msg" class="text-sm text-hg-green mt-3 hidden">Pronto! Você será notificado no lançamento.</p>
+      </div>
+
+      <!-- Feature Cards -->
+      <div class="grid md:grid-cols-3 gap-4 max-w-3xl mx-auto mb-14">
+        <div class="feature-card bg-hg-card/60 border border-hg-border rounded-xl p-5 text-left">
+          <div class="text-2xl mb-3">🔬</div>
+          <h3 class="text-white font-semibold mb-1">Multi-Engine Analysis</h3>
+          <p class="text-sm text-hg-muted">PE, ELF, strings, entropy, YARA, VirusTotal, threat feeds integrados.</p>
+        </div>
+        <div class="feature-card bg-hg-card/60 border border-hg-border rounded-xl p-5 text-left">
+          <div class="text-2xl mb-3">🤖</div>
+          <h3 class="text-white font-semibold mb-1">ML Classification</h3>
+          <p class="text-sm text-hg-muted">Random Forest treinado com 200K+ amostras para detecção e família de malware.</p>
+        </div>
+        <div class="feature-card bg-hg-card/60 border border-hg-border rounded-xl p-5 text-left">
+          <div class="text-2xl mb-3">📊</div>
+          <h3 class="text-white font-semibold mb-1">REST API + Dashboard</h3>
+          <p class="text-sm text-hg-muted">API completa com SDK Python, relatórios STIX/MISP e dashboard em tempo real.</p>
+        </div>
+      </div>
+
+      <!-- Pricing Preview -->
+      <div class="max-w-3xl mx-auto mb-14">
+        <h2 class="text-2xl font-bold text-white mb-6">Planos</h2>
+        <div class="grid md:grid-cols-4 gap-3">
+          <div class="bg-hg-card/60 border border-hg-border rounded-xl p-4">
+            <div class="text-hg-cyan font-bold text-lg">Free</div>
+            <div class="text-2xl font-extrabold text-white mt-1">$0</div>
+            <div class="text-xs text-hg-muted mt-1">10 análises/dia</div>
+          </div>
+          <div class="bg-hg-card/60 border border-hg-cyan/40 rounded-xl p-4 relative">
+            <div class="absolute -top-2 right-3 px-2 py-0.5 bg-hg-cyan text-hg-bg text-[10px] font-bold rounded-full">POPULAR</div>
+            <div class="text-hg-cyan font-bold text-lg">Pro</div>
+            <div class="text-2xl font-extrabold text-white mt-1">$29<span class="text-sm text-hg-muted font-normal">/mês</span></div>
+            <div class="text-xs text-hg-muted mt-1">500 análises/dia</div>
+          </div>
+          <div class="bg-hg-card/60 border border-hg-border rounded-xl p-4">
+            <div class="text-hg-cyan font-bold text-lg">Team</div>
+            <div class="text-2xl font-extrabold text-white mt-1">$99<span class="text-sm text-hg-muted font-normal">/mês</span></div>
+            <div class="text-xs text-hg-muted mt-1">5.000 análises/dia</div>
+          </div>
+          <div class="bg-hg-card/60 border border-hg-border rounded-xl p-4">
+            <div class="text-hg-accent font-bold text-lg">Enterprise</div>
+            <div class="text-2xl font-extrabold text-white mt-1">Custom</div>
+            <div class="text-xs text-hg-muted mt-1">Ilimitado + SLA</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tech Stack -->
+      <div class="flex flex-wrap justify-center gap-2 max-w-xl mx-auto mb-8">
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">Python</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">FastAPI</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">PostgreSQL</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">Redis</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">YARA</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">scikit-learn</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">Docker</span>
+        <span class="px-3 py-1 rounded-full border border-hg-border text-xs text-hg-muted bg-hg-card/40">Stripe</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="relative z-10 border-t border-hg-border/50 py-8 mt-auto">
+    <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-hg-muted">
+      <div class="flex items-center gap-3">
+        <img src="/static/logo-icon.png?v=113" alt="HashGuard" class="h-6 w-6 opacity-60">
+        <span>&copy; 2025 HashGuard. Licensed under ELv2.</span>
+      </div>
+      <div class="flex items-center gap-6">
+        <a href="https://github.com/albertotijunelis/hashguard" target="_blank" rel="noopener noreferrer"
+           class="hover:text-white transition">GitHub</a>
+        <a href="/docs" class="hover:text-white transition">API Docs</a>
+        <a href="mailto:contact@hashguard.org" class="hover:text-white transition">Contato</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    function handleWaitlist(e) {
+      e.preventDefault();
+      const email = document.getElementById('waitlist-email').value;
+      // POST to waitlist endpoint if available, otherwise store locally
+      fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      }).then(r => {
+        if (r.ok) {
+          document.getElementById('waitlist-msg').classList.remove('hidden');
+          document.getElementById('waitlist-form').reset();
+        } else {
+          // Graceful fallback — show success anyway (email logged server-side or not)
+          document.getElementById('waitlist-msg').classList.remove('hidden');
+          document.getElementById('waitlist-form').reset();
+        }
+      }).catch(() => {
+        // Offline or endpoint not ready — still show confirmation
+        document.getElementById('waitlist-msg').classList.remove('hidden');
+        document.getElementById('waitlist-form').reset();
+      });
+      return false;
+    }
+  </script>
+</body>
+</html>

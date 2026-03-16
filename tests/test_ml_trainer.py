@@ -635,7 +635,7 @@ class TestStartTrainingThread(unittest.TestCase):
                 if ml_trainer._current_job.status != "running":
                     break
             self.assertEqual(ml_trainer._current_job.status, "error")
-            self.assertIn("boom", ml_trainer._current_job.error)
+            self.assertIn("Training failed", ml_trainer._current_job.error)
 
 
 class TestListModelsEdge(unittest.TestCase):

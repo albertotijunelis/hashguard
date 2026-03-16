@@ -117,13 +117,22 @@ async def publish_to_kaggle(
     if not path:
         raise HTTPException(status_code=404, detail=f"Version {version} not found locally")
 
+    # Validate source path: must exist and be within the dataset directory
+    from pathlib import Path
+    resolved_path = Path(path).resolve()
+    app_data = os.environ.get("APPDATA") or os.path.expanduser("~")
+    dataset_base_dir = Path(os.path.join(app_data, "HashGuard", "datasets")).resolve()
+    if not resolved_path.is_relative_to(dataset_base_dir):
+        raise HTTPException(status_code=400, detail="Invalid dataset path")
+    real_path = str(resolved_path)
+
     try:
         import json
         import re as _re
         # Kaggle API uses a temp dir with dataset-metadata.json
         with tempfile.TemporaryDirectory() as tmpdir:
             # Copy dataset file (sanitize version to prevent path traversal)
-            ext = path.rsplit(".", 1)[-1]
+            ext = real_path.rsplit(".", 1)[-1]
             safe_version = _re.sub(r'[^a-zA-Z0-9._-]', '', str(version))
             safe_ext = _re.sub(r'[^a-zA-Z0-9]', '', ext)
             if not safe_version or not safe_ext:
@@ -134,7 +143,7 @@ async def publish_to_kaggle(
             # Verify path stays within tmpdir
             if not os.path.realpath(dest).startswith(os.path.realpath(tmpdir)):
                 raise HTTPException(status_code=400, detail="Invalid version")
-            shutil.copy2(path, dest)
+            shutil.copy2(real_path, dest)
 
             # Create metadata
             metadata = {

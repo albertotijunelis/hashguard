@@ -499,7 +499,7 @@ def analyze_memory(file_path: str, pe_info: Optional[dict] = None) -> MemoryAnal
 
     except Exception as e:
         logger.debug(f"Memory analysis error: {e}")
-        result.summary = f"Analysis error: {e}"
+        result.summary = "Analysis error"
     finally:
         pe.close()
 

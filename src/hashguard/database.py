@@ -617,11 +617,12 @@ def create_dataset_version(version: str, fmt: str = "parquet",
     filename = f"hashguard_dataset_v{safe_version}.{safe_ext}"
     filepath = os.path.join(dataset_dir, filename)
     # Ensure path stays within dataset_dir
-    if os.path.realpath(filepath) != os.path.normpath(filepath) or \
-       not os.path.realpath(filepath).startswith(os.path.realpath(dataset_dir)):
+    from pathlib import Path
+    resolved_filepath = Path(filepath).resolve()
+    resolved_dataset_dir = Path(dataset_dir).resolve()
+    if not resolved_filepath.is_relative_to(resolved_dataset_dir):
         raise ValueError("Invalid version or format")
-    mode = "wb" if isinstance(data_bytes, bytes) else "w"
-    with open(filepath, "wb") as f:
+    with open(str(resolved_filepath), "wb") as f:
         f.write(data_bytes)
 
     # Store version record

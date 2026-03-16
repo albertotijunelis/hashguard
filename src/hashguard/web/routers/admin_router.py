@@ -26,18 +26,21 @@ if HAS_FASTAPI:
 
     def _require_admin():
         """Dependency that requires admin role."""
-        from hashguard.web.auth import _is_auth_enabled, require_role
+        from hashguard.web.auth import _is_auth_enabled
         if not _is_auth_enabled():
             return None
-        return Depends(require_role("admin"))
+        return None
 
     # We use a simpler approach: check admin in each endpoint
     def _check_admin(request: Request):
         from hashguard.web.auth import _is_auth_enabled, _extract_identity
         if not _is_auth_enabled():
-            return True
+            raise HTTPException(
+                status_code=403,
+                detail="Admin panel requires authentication. Set HASHGUARD_AUTH=1 and create an admin account.",
+            )
         identity = _extract_identity(request)
-        if not identity or getattr(identity, "role", None) != "admin":
+        if not identity or identity.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin access required")
         return True
 

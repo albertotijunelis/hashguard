@@ -646,8 +646,8 @@ def start_training(
             with _job_lock:
                 _current_job.status = "error"
                 _current_job.finished_at = datetime.now().isoformat()
-                _current_job.error = str(e)
-                _current_job.message = f"Error: {e}"
+                _current_job.error = "Training failed"
+                _current_job.message = "Error: training failed"
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -676,19 +676,23 @@ def _safe_model_path(model_id: str, ext: str) -> str:
     if not safe or safe.startswith('.'):
         raise ValueError(f"Invalid model_id: {model_id!r}")
     path = os.path.join(MODEL_DIR, f"{safe}{ext}")
-    # Verify path stays within MODEL_DIR
-    if not os.path.realpath(path).startswith(os.path.realpath(MODEL_DIR) + os.sep) and \
-       os.path.realpath(path) != os.path.realpath(os.path.join(MODEL_DIR, f"{safe}{ext}")):
+    real_path = os.path.realpath(path)
+    real_model_dir = os.path.realpath(MODEL_DIR)
+    if not real_path.startswith(real_model_dir + os.sep) and real_path != real_model_dir:
         raise ValueError(f"Invalid model_id: {model_id!r}")
-    return path
+    return real_path
 
 
 def get_model_metrics(model_id: str) -> Optional[dict]:
     """Load metrics for a specific model by ID."""
     meta_path = _safe_model_path(model_id, ".json")
-    if not os.path.isfile(meta_path):
+    real_meta = os.path.realpath(meta_path)
+    real_base = os.path.realpath(MODEL_DIR)
+    if not real_meta.startswith(real_base + os.sep):
         return None
-    with open(meta_path, "r", encoding="utf-8") as f:
+    if not os.path.isfile(real_meta):
+        return None
+    with open(real_meta, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -697,8 +701,12 @@ def delete_model(model_id: str) -> bool:
     deleted = False
     for ext in (".joblib", ".json"):
         p = _safe_model_path(model_id, ext)
-        if os.path.isfile(p):
-            os.remove(p)
+        real_p = os.path.realpath(p)
+        real_base = os.path.realpath(MODEL_DIR)
+        if not real_p.startswith(real_base + os.sep):
+            continue
+        if os.path.isfile(real_p):
+            os.remove(real_p)
             deleted = True
     return deleted
 
@@ -724,21 +732,27 @@ def predict_sample(features: Dict[str, float], model_id: Optional[str] = None) -
         model_path = str(files[0])
 
     if not os.path.isfile(model_path):
-        return {"error": f"Model file not found: {model_id}"}
+        return {"error": "Model file not found"}
 
-    if not _verify_model_hmac(model_path):
-        logger.warning(f"Model integrity check FAILED for {model_path}")
+    # Inline containment check before loading
+    real_model = os.path.realpath(model_path)
+    real_model_base = os.path.realpath(MODEL_DIR)
+    if not real_model.startswith(real_model_base + os.sep):
+        return {"error": "Invalid model path"}
+
+    if not _verify_model_hmac(real_model):
+        logger.warning("Model integrity check FAILED")
         return {"error": "Model integrity check failed"}
 
     try:
         if HAS_JOBLIB:
-            data = joblib.load(model_path)
+            data = joblib.load(real_model)
         else:
             import pickle
-            with open(model_path, "rb") as f:
+            with open(real_model, "rb") as f:
                 data = pickle.load(f)
     except Exception as e:
-        return {"error": f"Failed to load model: {e}"}
+        return {"error": "Failed to load model"}
 
     clf = data["clf"]
     scaler = data["scaler"]

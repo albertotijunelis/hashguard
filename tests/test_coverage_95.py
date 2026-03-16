@@ -378,24 +378,23 @@ class TestAdminCheckAdmin:
         if not hasattr(admin_router, "_check_admin"):
             pytest.skip("_check_admin not exposed")
         import hashguard.web.auth as auth_mod
-        auth_mod._extract_identity = MagicMock(return_value=None)
+        from fastapi import HTTPException
         try:
-            with patch.object(auth_mod, "_is_auth_enabled", return_value=False):
-                result = admin_router._check_admin(MagicMock())
-            assert result is True
+            with patch.object(auth_mod, "_is_auth_enabled", return_value=False), \
+                 pytest.raises(HTTPException) as exc_info:
+                admin_router._check_admin(MagicMock())
+            assert exc_info.value.status_code == 403
         finally:
-            if hasattr(auth_mod, "_extract_identity") and isinstance(auth_mod._extract_identity, MagicMock):
-                delattr(auth_mod, "_extract_identity")
+            pass
 
     def test_check_admin_auth_enabled_admin_user(self):
         if not hasattr(admin_router, "_check_admin"):
             pytest.skip("_check_admin not exposed")
         import hashguard.web.auth as auth_mod
-        mock_identity = MagicMock()
-        mock_identity.role = "admin"
-        auth_mod._extract_identity = MagicMock(return_value=mock_identity)
+        mock_identity = {"sub": "admin_user", "role": "admin"}
         try:
-            with patch.object(auth_mod, "_is_auth_enabled", return_value=True):
+            with patch.object(auth_mod, "_is_auth_enabled", return_value=True), \
+                 patch.object(auth_mod, "_extract_identity", return_value=mock_identity):
                 result = admin_router._check_admin(MagicMock())
             assert result is True
         finally:
@@ -406,18 +405,16 @@ class TestAdminCheckAdmin:
         if not hasattr(admin_router, "_check_admin"):
             pytest.skip("_check_admin not exposed")
         import hashguard.web.auth as auth_mod
-        mock_identity = MagicMock()
-        mock_identity.role = "user"
-        auth_mod._extract_identity = MagicMock(return_value=mock_identity)
+        mock_identity = {"sub": "user", "role": "user"}
         from fastapi import HTTPException
         try:
             with patch.object(auth_mod, "_is_auth_enabled", return_value=True), \
+                 patch.object(auth_mod, "_extract_identity", return_value=mock_identity), \
                  pytest.raises(HTTPException) as exc_info:
                 admin_router._check_admin(MagicMock())
             assert exc_info.value.status_code == 403
         finally:
-            if hasattr(auth_mod, "_extract_identity") and isinstance(auth_mod._extract_identity, MagicMock):
-                delattr(auth_mod, "_extract_identity")
+            pass
 
     def test_require_admin_no_auth(self):
         if not hasattr(admin_router, "_require_admin"):

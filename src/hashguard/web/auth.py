@@ -253,6 +253,38 @@ def _is_auth_enabled() -> bool:
     return False
 
 
+def _extract_identity(request) -> Optional[dict]:
+    """Extract identity from a FastAPI Request synchronously.
+
+    Returns a dict with at least 'sub' and 'role' keys, or None on failure.
+    Used by admin_router and other code that needs identity outside of Depends().
+    """
+    if not _is_auth_enabled():
+        plan = os.environ.get("HASHGUARD_DEFAULT_PLAN", "free")
+        return {"sub": "local", "role": "viewer", "plan": plan}
+
+    auth_header = getattr(request, "headers", {}).get("authorization", "")
+    if not auth_header:
+        return None
+
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+
+    token = parts[1]
+    if token.startswith("hg_"):
+        key_info = validate_api_key(token)
+        if not key_info:
+            return None
+        return {"sub": key_info["name"], "role": key_info["role"]}
+
+    try:
+        payload = verify_token(token)
+        return payload
+    except Exception:
+        return None
+
+
 def get_current_user():
     """FastAPI dependency that validates auth if enabled.
 

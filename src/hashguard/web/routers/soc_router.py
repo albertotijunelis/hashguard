@@ -173,8 +173,8 @@ def _forward_to_syslog(integration: dict, sample: dict) -> dict:
             s.sendto(msg.encode("utf-8"), (host, port))
             s.close()
         return {"ok": True, "format": "cef"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return {"ok": False, "error": "Syslog delivery failed"}
 
 
 def _forward_to_splunk(integration: dict, sample: dict) -> dict:
@@ -202,8 +202,8 @@ def _forward_to_splunk(integration: dict, sample: dict) -> dict:
             timeout=15, verify=False,
         )
         return {"ok": r.status_code < 300, "status_code": r.status_code}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return {"ok": False, "error": "Splunk delivery failed"}
 
 
 def _forward_to_elastic(integration: dict, sample: dict) -> dict:
@@ -230,8 +230,8 @@ def _forward_to_elastic(integration: dict, sample: dict) -> dict:
             json=doc, headers=headers, timeout=15, verify=False,
         )
         return {"ok": r.status_code < 300, "status_code": r.status_code}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return {"ok": False, "error": "Elastic delivery failed"}
 
 
 def _forward_to_sentinel(integration: dict, sample: dict) -> dict:
@@ -254,8 +254,8 @@ def _forward_to_sentinel(integration: dict, sample: dict) -> dict:
     try:
         r = httpx.post(url, json=payload, headers=headers, timeout=15)
         return {"ok": r.status_code < 300, "status_code": r.status_code}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return {"ok": False, "error": "Sentinel delivery failed"}
 
 
 def _forward_to_generic(integration: dict, sample: dict) -> dict:
@@ -276,8 +276,8 @@ def _forward_to_generic(integration: dict, sample: dict) -> dict:
     try:
         r = httpx.post(url, json=to_ecs(sample), headers=headers, timeout=15)
         return {"ok": r.status_code < 300, "status_code": r.status_code}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    except Exception:
+        return {"ok": False, "error": "HTTP delivery failed"}
 
 
 _FORWARDERS = {

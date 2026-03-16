@@ -377,8 +377,8 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
 
             unpack_result = auto_unpack(file_path)
             result_dict["unpack_result"] = unpack_result.to_dict()
-    except Exception as e:
-        logger.debug(f"Auto-unpack error: {e}")
+    except Exception:
+        logger.debug("Auto-unpack error")
 
     # IOC Graph
     try:
@@ -386,8 +386,8 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
 
         graph = build_graph(result_dict)
         result_dict["ioc_graph"] = graph.to_visjs()
-    except Exception as e:
-        logger.debug(f"IOC graph error: {e}")
+    except Exception:
+        logger.debug("IOC graph error")
 
     # Timeline
     try:
@@ -395,8 +395,8 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
 
         timeline = build_timeline(result_dict)
         result_dict["timeline"] = timeline.to_dict()
-    except Exception as e:
-        logger.debug(f"Timeline error: {e}")
+    except Exception:
+        logger.debug("Timeline error")
 
     # Store in database
     try:
@@ -405,8 +405,8 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
         sample_id = store_sample(result_dict)
         result_dict["sample_id"] = sample_id
         store_timeline_event(sample_id, "analysis", "Full v2 analysis completed")
-    except Exception as e:
-        logger.debug(f"Database storage error: {e}")
+    except Exception:
+        logger.debug("Database storage error")
 
     # Extract & store ML dataset features
     feats = None
@@ -418,8 +418,8 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
         sha = result_dict.get("hashes", {}).get("sha256", "")
         if sha and sample_id:
             store_dataset_features(sample_id, sha, feats)
-    except Exception as e:
-        logger.debug(f"Dataset feature extraction error: {e}")
+    except Exception:
+        logger.debug("Dataset feature extraction error")
 
     # Real-time prediction using trained ML model
     try:
@@ -429,24 +429,24 @@ def _run_full_analysis(file_path: str, use_vt: bool = False) -> dict:
             prediction = predict_sample(feats)
             if "error" not in prediction:
                 result_dict["trained_model_prediction"] = prediction
-    except Exception as e:
-        logger.debug(f"Trained model prediction error: {e}")
+    except Exception:
+        logger.debug("Trained model prediction error")
 
     # Fire webhook notifications
     try:
         from hashguard.web.webhooks import notify_analysis_complete
 
         notify_analysis_complete(result_dict)
-    except Exception as e:
-        logger.debug(f"Webhook notification error: {e}")
+    except Exception:
+        logger.debug("Webhook notification error")
 
     # Forward to SOC integrations
     try:
         from hashguard.web.routers.soc_router import forward_alert
 
         forward_alert(result_dict)
-    except Exception as e:
-        logger.debug(f"SOC forwarding error: {e}")
+    except Exception:
+        logger.debug("SOC forwarding error")
 
     return _sanitize_for_json(result_dict)
 
@@ -637,7 +637,7 @@ if app:
             return JSONResponse(content=result)
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.error("Analysis error")
             raise HTTPException(status_code=500, detail="Internal server error")
         finally:
@@ -659,17 +659,29 @@ if app:
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid or blocked URL")
         except Exception as e:
-            err = str(e)
+            ename = type(e).__name__
+            emsg = str(e).lower()
             # Friendly messages for common HTTP errors
-            if "403" in err:
+            if "HTTPError" in ename and hasattr(e, "response"):
+                code = getattr(getattr(e, "response", None), "status_code", 0)
+                if code == 403:
+                    raise HTTPException(
+                        status_code=502, detail="Remote server denied access (403 Forbidden)"
+                    )
+                if code == 404:
+                    raise HTTPException(
+                        status_code=502, detail="File not found on remote server (404)"
+                    )
+            # Also detect HTTP error codes from string messages
+            if "403" in emsg and "forbidden" in emsg:
                 raise HTTPException(
                     status_code=502, detail="Remote server denied access (403 Forbidden)"
                 )
-            if "404" in err:
+            if "404" in emsg and ("not found" in emsg):
                 raise HTTPException(
                     status_code=502, detail="File not found on remote server (404)"
                 )
-            if "ConnectionError" in type(e).__name__ or "Timeout" in type(e).__name__:
+            if "ConnectionError" in ename or "Timeout" in ename:
                 raise HTTPException(
                     status_code=502, detail="Could not connect to remote server"
                 )
@@ -717,7 +729,7 @@ if app:
                 return JSONResponse(content=result)
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.error("Async analysis error")
             raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -1206,10 +1218,17 @@ if app:
             if directory:
                 if ".." in directory:
                     raise HTTPException(status_code=400, detail="Invalid directory path")
-                resolved = os.path.realpath(directory)
-                if not os.path.isdir(resolved):
+                from pathlib import Path as _Path
+                resolved_dir = _Path(directory).resolve()
+                if not resolved_dir.is_dir():
                     raise HTTPException(status_code=400, detail="Invalid directory path")
-                directory = resolved
+                # Containment: only allow paths under user home or common data dirs
+                _home = _Path(os.path.expanduser("~")).resolve()
+                _appdata = _Path(os.environ.get("APPDATA", str(_home))).resolve()
+                _allowed = [_home, _appdata, _Path("/tmp").resolve()]
+                if not any(resolved_dir.is_relative_to(r) for r in _allowed):
+                    raise HTTPException(status_code=400, detail="Directory outside allowed paths")
+                directory = str(resolved_dir)
 
             # Cap per source: recent=100, tag/filetype=1000, mixed/local/continuous=unlimited
             if source == "recent":
@@ -1358,12 +1377,12 @@ if app:
             features = dict(row)
             result = predict_sample(features)
             if "error" in result:
-                raise HTTPException(status_code=400, detail=result["error"])
+                raise HTTPException(status_code=400, detail="Prediction failed")
             return JSONResponse(content=result)
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"ML predict error: {e}")
+            logger.warning("ML predict error")
             raise HTTPException(status_code=500, detail="Internal server error")
 
     # ── Anomaly detection endpoints ──────────────────────────────────────
@@ -1444,7 +1463,7 @@ if app:
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Memory analysis error: {e}")
+            logger.warning("Memory analysis error")
             raise HTTPException(status_code=500, detail="Internal server error")
 
     # ── Webhook endpoints ────────────────────────────────────────────────

@@ -605,7 +605,7 @@ class TestUnpackUPXEdge:
             mock_shutil.copy2 = MagicMock()
             with patch("hashguard.unpacker.subprocess.run", side_effect=RuntimeError("broken")):
                 result = unpack_upx(str(p))
-                assert "broken" in result.error
+                assert result.error == "Unpacking failed"
 
 
 class TestGetNonCodeRegionsWithPE:

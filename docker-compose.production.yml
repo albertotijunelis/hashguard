@@ -1,0 +1,225 @@
+# HashGuard SaaS — Production (VPS + S3)
+#
+# Optimized for a single VPS (4-8GB RAM) with external S3 for storage.
+# Usage:
+#   cp .env.production .env
+#   docker compose -f docker-compose.production.yml up -d
+#
+# First-time SSL setup:
+#   docker compose -f docker-compose.production.yml run --rm certbot \
+#     certonly --webroot -w /var/www/certbot -d hashguard.org -d www.hashguard.org
+#
+# Cron renewal (add to crontab):
+#   0 3 * * 1 cd /opt/hashguard && docker compose -f docker-compose.production.yml run --rm certbot renew && docker compose -f docker-compose.production.yml exec nginx nginx -s reload
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: hashguard
+      POSTGRES_USER: hashguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Not exposed to host — only internal network
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hashguard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ── Redis ───────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: >
+      redis-server
+        --maxmemory 128mb
+        --maxmemory-policy allkeys-lru
+        --save 60 1000
+        --appendonly yes
+    volumes:
+      - redisdata:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ── HashGuard API ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hashguard:${POSTGRES_PASSWORD}@postgres:5432/hashguard
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      HASHGUARD_AUTH: "1"
+      HASHGUARD_ENV: production
+      HASHGUARD_COMING_SOON: ${HASHGUARD_COMING_SOON:-1}
+      # S3 storage
+      HG_STORAGE_BACKEND: s3
+      HG_S3_BUCKET: ${HG_S3_BUCKET}
+      HG_S3_REGION: ${HG_S3_REGION:-us-east-1}
+      HG_S3_ACCESS_KEY: ${HG_S3_ACCESS_KEY}
+      HG_S3_SECRET_KEY: ${HG_S3_SECRET_KEY}
+    env_file:
+      - .env
+    expose:
+      - "8000"
+    command: >
+      sh -c "
+        python -m alembic upgrade head &&
+        uvicorn hashguard.web.api:app
+          --host 0.0.0.0
+          --port 8000
+          --workers 2
+          --limit-concurrency 100
+          --timeout-keep-alive 30
+      "
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── Celery Worker (analysis + ingest) ───────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://hashguard:${POSTGRES_PASSWORD}@postgres:5432/hashguard
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      HG_STORAGE_BACKEND: s3
+      HG_S3_BUCKET: ${HG_S3_BUCKET}
+      HG_S3_REGION: ${HG_S3_REGION:-us-east-1}
+      HG_S3_ACCESS_KEY: ${HG_S3_ACCESS_KEY}
+      HG_S3_SECRET_KEY: ${HG_S3_SECRET_KEY}
+    env_file:
+      - .env
+    command: >
+      celery -A hashguard.tasks worker
+        --loglevel=info
+        --concurrency=2
+        --max-tasks-per-child=50
+        --without-heartbeat
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ── Celery Beat (scheduled tasks) ───────────────────────────────────────
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    env_file:
+      - .env
+    command: >
+      celery -A hashguard.tasks beat
+        --loglevel=info
+        --schedule=/tmp/celerybeat-schedule
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ── Nginx (SSL/TLS termination) ─────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certbot-www:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    environment:
+      DOMAIN: ${DOMAIN:-hashguard.org}
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  # ── Certbot (Let's Encrypt SSL) ─────────────────────────────────────────
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: >
+      /bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done'
+
+  # ── Database Backup (daily to S3) ───────────────────────────────────────
+  backup:
+    image: postgres:16-alpine
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: hashguard
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: hashguard
+      HG_S3_BUCKET: ${HG_S3_BUCKET}
+      AWS_ACCESS_KEY_ID: ${HG_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${HG_S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: ${HG_S3_REGION:-us-east-1}
+    volumes:
+      - ./scripts/backup.sh:/backup.sh:ro
+    entrypoint: >
+      /bin/sh -c 'apk add --no-cache aws-cli && while true; do sh /backup.sh; sleep 86400; done'
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+volumes:
+  pgdata:
+  redisdata:
+  certbot-www:
+  certbot-certs:
